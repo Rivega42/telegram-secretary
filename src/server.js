@@ -102,8 +102,8 @@ async function executeVikaResponse(task) {
       return;
     }
     
-    // Получаем историю для контекста
-    const history = getConversationHistory(task.mappingId, 10);
+    // Получаем историю для контекста (25 последних сообщений)
+    const history = getConversationHistory(task.mappingId, 25);
     
     // Вызываем Вику (LLM)
     console.log(`[Execute] Calling Vika LLM for mapping ${task.mappingId}...`);
