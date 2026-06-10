@@ -1,0 +1,27 @@
+services:
+  secretary:
+    image: node:22-slim
+    container_name: telegram-secretary
+    ports:
+      - "18789:18789"
+    volumes:
+      - ./workspace:/workspace
+      - ./openclaw.json:/workspace/.openclaw/openclaw.json
+      - secretary-data:/root/.openclaw
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    command: >
+      sh -c "npm install -g openclaw@latest &&
+             OPENCLAW_HOME=/workspace openclaw gateway run --port 18789"
+    restart: unless-stopped
+    networks:
+      - secretary-net
+
+volumes:
+  secretary-data:
+
+networks:
+  secretary-net:
+    driver: bridge
