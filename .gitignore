@@ -1,5 +1,34 @@
+# Dependencies
 node_modules/
+
+# Secrets
 .env
-workspace/memory/*.jsonl
-workspace/.openclaw/gateway-state.json
+.env.local
+.env.*.local
+tokens.env
+*.token
+*.secret
+
+# State / runtime data
 *.log
+*.jsonl
+state/
+data/
+memory/secretary/
+connections.json
+contacts.json
+conversations.json
+pending.json
+
+# Private contact data (carries personal info)
+docs/CONTACTS-private.md
+
+# PM2 logs
+.pm2/
+pm2.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp

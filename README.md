@@ -1,76 +1,105 @@
-# 🤖 Telegram Secretary
+# 🤖 Telegram Secretary Proxy
 
-OpenClaw-агент для ответов в Telegram-чатах, когда владелец занят.
+**Telegram Business Webhook Proxy** — сервер для автоматических ответов в Telegram Business, когда владелец (Роман) не отвечает.
 
-## Что это
+## Как работает
 
-Этот репозиторий содержит конфигурацию OpenClaw gateway, настроенную как **личный секретарь** в Telegram. Агент:
+1. Клиент пишет Роману в Telegram (Business-аккаунт)
+2. Telegram отправляет webhook на `/tg/business-webhook`
+3. Прокси создаёт **отложенный ответ** и уведомляет Романа
+4. Если Роман не ответил сам через N минут — **Вика (LLM)** генерирует ответ
+5. Ответ отправляется клиенту через Business API
+6. Копия диалога отправляется Роману в другой чат
 
-- Подключается к указанным Telegram-группам и чатам
-- Отвечает на сообщения, когда владелец не может ответить
-- Использует Claude Sonnet/Opus (через Claude Max) или DeepSeek
-- Хранит контекст бесед, учится стилю владельца
-- Может работать 24/7 на VPS
+### Если Роман отвечает сам
+- Pending-задача отменяется автоматически
+- Роман получает уведомление: "Ты ответил сам — отложенный ответ отменён"
 
-## Структура
+## Архитектура
 
 ```
-├── openclaw.json          # Конфигурация OpenClaw gateway
-├── workspace/
-│   ├── SOUL.md            # Личность агента
-│   ├── AGENTS.md          # Правила работы
-│   ├── USER.md            # Данные владельца
-│   ├── MEMORY.md          # Долгосрочная память
-│   ├── IDENTITY.md        # Самоидентификация
-│   └── memory/            # Ежедневные логи и память
-├── entrypoint.sh          # Скрипт запуска (Docker/host)
-├── .env.example           # Шаблон переменных окружения
-└── docker-compose.yml     # Docker Compose для деплоя
+┌──────────────┐     Telegram API     ┌──────────────────┐
+│   Telegram   │ ◄──────────────────► │  Secretary Proxy  │
+│  Business    │                      │  (Express :18791) │
+│  Account     │                      │                   │
+└──────────────┘                      │  ┌──────────────┐ │
+        │                             │  │   vika.js    │ │
+        │ Webhook                     │  │ (LLM через   │ │
+        ▼                             │  │  LiteLLM)    │ │
+  ┌──────────┐                        │  └──────────────┘ │
+  │  Nginx   │                        │                   │
+  │  Reverse │                        │  ┌──────────────┐ │
+  │  Proxy   │                        │  │ scheduler.js │ │
+  └──────────┘                        │  │ (таймеры)    │ │
+                                      │  └──────────────┘ │
+                                      │                   │
+                                      │  ┌──────────────┐ │
+                                      │  │  state.js    │ │
+                                      │  │ (данные)     │ │
+                                      │  └──────────────┘ │
+                                      └──────────────────┘
+                                               │
+                                               ▼
+                                      ┌──────────────────┐
+                                      │  Telegram Bot    │
+                                      │  (@oneint_bot)   │
+                                      │  Уведомления     │
+                                      │  Роману          │
+                                      └──────────────────┘
 ```
 
 ## Быстрый старт
-
-### На VPS (рекомендуется)
 
 ```bash
 git clone https://github.com/Rivega42/telegram-secretary
 cd telegram-secretary
 cp .env.example .env
-# Отредактируй .env: BOT_TOKEN, MODEL и т.д.
-docker compose up -d
-```
-
-### Напрямую (без Docker)
-
-```bash
-# Требуется Node.js 22+
-npm install -g openclaw@latest
-OPENCLAW_HOME=$(pwd)/workspace openclaw gateway run --port 18789
+# Заполни .env (см. ниже)
+npm install
+npm start
 ```
 
 ## Переменные окружения
 
-| Переменная | Обязательно | Описание |
-|-----------|-------------|----------|
-| `BOT_TOKEN` | ✅ | Токен Telegram бота от @BotFather |
-| `ANTHROPIC_API_KEY` | ✅ | Ключ Anthropic Claude (Claude Max) |
-| `DEEPSEEK_API_KEY` | — | Ключ DeepSeek для fallback |
+| Переменная | Описание |
+|-----------|----------|
+| `BUSINESS_BOT_TOKEN` | Токен Telegram Business бота |
+| `ONEINT_BOT_TOKEN` | Токен бота для уведомлений Роману |
+| `OWNER_CHAT_ID` | Chat ID Романа |
+| `LITELLM_API_KEY` | Ключ для LiteLLM |
+| `WEBHOOK_SECRET` | Секрет webhook (опционально) |
+| `DELAY_MINUTES` | Задержка перед ответом Вики (по умолч. 5) |
+| `DRY_RUN` | Режим без реальных ответов |
+| `PORT` | Порт сервера (по умолч. 18791) |
 
-## Telegram Groups
+## API
 
-В `openclaw.json` указываются ID групп, в которых агент отвечает:
+- `POST /tg/business-webhook` — Webhook от Telegram
+- `POST /api/reply` — Ручной ответ Вики
+- `GET /api/contacts` — Список контактов
+- `GET /api/conversations` — Разговоры
+- `GET /api/pending` — Отложенные ответы
+- `DELETE /api/pending/:chatId` — Отменить ответ
+- `GET /health` — Проверка
 
-```json
-"groups": {
-  "-1001234567890": {
-    "enabled": true,
-    "topics": {
-      "2": { "requireMention": false, "enabled": true }
-    }
-  }
-}
+## Deploy
+
+### PM2 (рекомендуется)
+```bash
+npm install pm2 -g
+pm2 start ecosystem.config.cjs
+pm2 save
 ```
 
-## License
+### Nginx
+Смотри `nginx/secretary.conf` за reverse proxy.
 
-MIT
+## Разработка
+
+```bash
+npm run dev
+```
+
+## Репозиторий
+
+Исходный репозиторий: https://github.com/Rivega42/gh-secretary (ветка develop).
