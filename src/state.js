@@ -73,6 +73,14 @@ export function markProcessed(updateId) {
 }
 
 /**
+ * Снять пометку «обработан» — вызывается при ошибке обработки,
+ * чтобы повторная доставка от Telegram не была отброшена как дубликат
+ */
+export function unmarkProcessed(updateId) {
+  processedUpdates.delete(updateId);
+}
+
+/**
  * Генерировать короткий mapping_id (6 символов)
  */
 export function generateMappingId() {
@@ -183,6 +191,20 @@ export function getOrCreateMapping(businessConnectionId, businessChatId, sender)
 export function getMapping(mappingId) {
   const conversations = getConversations();
   return conversations[mappingId] || null;
+}
+
+/**
+ * Найти существующий маппинг по business-чату (без создания нового)
+ */
+export function findMappingByChat(businessConnectionId, businessChatId) {
+  const conversations = getConversations();
+  for (const [mappingId, data] of Object.entries(conversations)) {
+    if (data.business_connection_id === businessConnectionId &&
+        data.business_chat_id === businessChatId) {
+      return { mappingId, ...data };
+    }
+  }
+  return null;
 }
 
 /**

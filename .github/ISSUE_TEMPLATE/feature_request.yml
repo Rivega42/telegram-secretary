@@ -1,0 +1,33 @@
+name: ✨ Фича
+description: Предложение новой функциональности
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу решает
+      description: Опиши сценарий «как владелец/пользователь я хочу ... чтобы ...»
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Этап роадмапа
+      description: К какому этапу ROADMAP.md это относится?
+      options:
+        - "Этап 1 — Ядро / единая память"
+        - "Этап 2 — Control plane"
+        - "Этап 3 — Канал / комментарии / чат"
+        - "Этап 4 — Мультиплатформенность"
+        - "Этап 5 — Надёжность"
+        - "Вне роадмапа / новое"
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки
+      options:
+        - label: Посмотрел ROADMAP.md и docs/openclaw-integration.md — не дублирует существующий план

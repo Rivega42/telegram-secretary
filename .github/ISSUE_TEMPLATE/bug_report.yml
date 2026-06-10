@@ -1,0 +1,34 @@
+name: 🐛 Баг
+description: Что-то работает не так, как описано
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что происходит
+      description: Опиши проблему и шаги воспроизведения
+      placeholder: |
+        1. Запускаю с ...
+        2. Отправляю сообщение ...
+        3. Ожидаю ..., получаю ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      description: Вывод сервера / содержимое log-*.jsonl (убери токены и личные данные!)
+      render: shell
+  - type: input
+    id: env
+    attributes:
+      label: Окружение
+      placeholder: "Node 22, Ubuntu 24.04, LLM: openrouter/..."
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки
+      options:
+        - label: Воспроизводится на свежем main
+        - label: В логах и описании нет токенов и личных данных
+          required: true

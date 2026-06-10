@@ -4,9 +4,9 @@
  * pendingTasks: Map<businessChatId, { mappingId, businessConnectionId, senderInfo, originalText, scheduledAt, timeoutHandle }>
  * 
  * Правила:
- * - 08:00-18:00 МСК → 5 минут задержки (рабочий день)
+ * - 08:00-18:00 МСК → 2 минуты задержки (рабочий день)
  * - 18:00-08:00 МСК → 3 минуты задержки (вечер/ночь)
- * - Если Роман ответил сам в этот чат → pending отменяется
+ * - Если владелец ответил сам в этот чат → pending отменяется
  */
 
 import fs from 'fs';

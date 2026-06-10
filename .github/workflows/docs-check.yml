@@ -1,0 +1,36 @@
+name: Актуальность документации
+
+# Правило проекта: изменил поведение (src/**) — обнови документацию в том же PR.
+# Подробнее: CONTRIBUTING.md, раздел «Документация — обязательная часть изменения».
+
+on:
+  pull_request:
+
+jobs:
+  docs-sync:
+    name: src/** изменён → документация обновлена
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Проверка
+        run: |
+          BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          CHANGED=$(git diff --name-only "$BASE" HEAD)
+          echo "Изменённые файлы:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -q '^src/'; then
+            if echo "$CHANGED" | grep -qE '^(docs/|CHANGELOG\.md|README\.md|\.env\.example)'; then
+              echo "✅ Код изменён, документация обновлена."
+            else
+              echo "❌ PR меняет src/**, но не трогает документацию."
+              echo "Обнови CHANGELOG.md (раздел [Unreleased]) и при необходимости README.md / docs/ / .env.example."
+              echo "Правило описано в CONTRIBUTING.md."
+              exit 1
+            fi
+          else
+            echo "✅ Код не менялся — проверка не требуется."
+          fi

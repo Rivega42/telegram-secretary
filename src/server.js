@@ -17,10 +17,12 @@ import 'dotenv/config';
 import express from 'express';
 import {
   markProcessed,
+  unmarkProcessed,
   saveConnection,
   updateContact,
   getOrCreateMapping,
   getMapping,
+  findMappingByChat,
   logUpdate,
   logOutgoing,
   getContacts,
@@ -40,9 +42,10 @@ import {
 } from './scheduler.js';
 
 const app = express();
-const PORT = process.env.PORT || 18791;
+const PORT = process.env.PORT || 18792;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const OWNER_CHAT_ID = String(process.env.OWNER_CHAT_ID || '');
+const API_KEY = process.env.API_KEY;
 
 // Middleware
 app.use(express.json());
@@ -50,6 +53,17 @@ app.use(express.json());
 // Логирование запросов
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
+// Авторизация админ-API: заголовок X-Api-Key или Authorization: Bearer
+app.use('/api', (req, res, next) => {
+  if (!API_KEY) return next(); // не настроен — предупреждение выводится при старте
+  const provided = req.headers['x-api-key']
+    || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (provided !== API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   next();
 });
 
@@ -119,10 +133,13 @@ async function executeVikaResponse(task) {
     );
     
     console.log(`[Execute] Business reply result: ok=${replyResult.ok}`);
-    
-    // Сохраняем ответ Вики в историю
-    appendConversationHistory(task.mappingId, 'vika', vikaResult.response);
-    
+
+    // Сохраняем ответ Вики в историю только если он реально дошёл до клиента,
+    // иначе контекст разойдётся с тем, что клиент видел на самом деле
+    if (replyResult.ok) {
+      appendConversationHistory(task.mappingId, 'vika', vikaResult.response);
+    }
+
     // Логируем исходящее
     logOutgoing(task.mappingId, vikaResult.response, replyResult.ok);
     
@@ -224,7 +241,14 @@ app.post('/tg/business-webhook', async (req, res) => {
       // Проверяем и отменяем pending для этого чата
       if (String(sender.id) === OWNER_CHAT_ID) {
         console.log(`⏭️  Сообщение от владельца в чат ${businessChatId}`);
-        
+
+        // Сохраняем ответ владельца в историю — иначе Вика не будет знать,
+        // что владелец уже что-то сказал, и может ему противоречить
+        const ownerMapping = findMappingByChat(businessConnectionId, businessChatId);
+        if (ownerMapping) {
+          appendConversationHistory(ownerMapping.mappingId, 'owner', text);
+        }
+
         // Отменяем pending для этого чата если есть
         const cancelled = cancelPending(businessChatId, 'owner replied');
         
@@ -294,6 +318,9 @@ app.post('/tg/business-webhook', async (req, res) => {
     
   } catch (err) {
     console.error('Error processing update:', err);
+    // Снимаем пометку дедупликации — Telegram повторит доставку после 500,
+    // и повтор не должен быть отброшен как дубликат
+    unmarkProcessed(update.update_id);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -422,5 +449,11 @@ app.listen(PORT, () => {
   console.log(`\n   DRY_RUN: ${process.env.DRY_RUN === 'true' ? 'YES' : 'NO'}`);
   console.log(`   State dir: ${process.env.STATE_DIR || './state'}`);
   console.log(`   Current delay: ${getDelayMinutes()} minutes (${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} MSK)`);
+  if (!API_KEY) {
+    console.warn('   ⚠️  API_KEY не задан — /api/* доступен без авторизации. Задай API_KEY в .env или закрой /api/* на уровне reverse-proxy.');
+  }
+  if (!WEBHOOK_SECRET) {
+    console.warn('   ⚠️  WEBHOOK_SECRET не задан — webhook принимает запросы без проверки секрета.');
+  }
   console.log('');
 });

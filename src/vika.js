@@ -1,10 +1,33 @@
 /**
- * vika.js — OpenClaw Gateway (model anthropic/claude-sonnet-4-6, fallback deepseek/deepseek-v4-flash)
+ * vika.js — генерация ответа секретаря через LLM
+ *
+ * Поддерживает два OpenAI-совместимых бэкенда (выбор по env):
+ *  1. Любой OpenAI-совместимый — LITELLM_BASE_URL + LITELLM_API_KEY + VIKA_MODEL
+ *     (LiteLLM, OpenRouter, кастомный gateway)
+ *  2. OpenClaw Gateway — GW_BASE_URL + GW_API_KEY (модель по умолчанию: openclaw)
+ *
+ * Если задан LITELLM_BASE_URL — используется вариант 1, иначе вариант 2.
  */
-const GW_BASE_URL = process.env.GW_BASE_URL || 'http://127.0.0.1:18789';
-const GW_API_KEY = process.env.GW_API_KEY || process.env.OPENCLAW_GATEWAY_TOKEN;
-const VIKA_MODEL = process.env.VIKA_MODEL || 'openclaw';
+
+const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '45000', 10);
 const DRY_RUN_VIKA = process.env.DRY_RUN_VIKA === 'true';
+
+function resolveLlmConfig() {
+  if (process.env.LITELLM_BASE_URL) {
+    return {
+      baseUrl: process.env.LITELLM_BASE_URL.replace(/\/$/, ''),
+      apiKey: process.env.LITELLM_API_KEY,
+      model: process.env.VIKA_MODEL || 'openai/gpt-4o',
+      label: 'LiteLLM/OpenAI-compatible'
+    };
+  }
+  return {
+    baseUrl: (process.env.GW_BASE_URL || 'http://127.0.0.1:18789').replace(/\/$/, ''),
+    apiKey: process.env.GW_API_KEY || process.env.OPENCLAW_GATEWAY_TOKEN,
+    model: process.env.VIKA_MODEL || 'openclaw',
+    label: 'OpenClaw Gateway'
+  };
+}
 
 function buildSystemPrompt() {
   return `ТЫ — ВИКА, ЛИЧНЫЙ СЕКРЕТАРЬ РОМАНА ГУДКОВА (@Rivega42).
@@ -15,9 +38,10 @@ Wow-эффект — важная цель: посетитель должен д
 
 ТЫ ВИДИШЬ КОНТЕКСТ ЧАТА:
 - Тебе передаётся история последних сообщений с таймстемпами
-- Ты видишь кто писал: собеседник или ты (Вика)
+- Ты видишь кто писал: собеседник, ты (Вика) или сам Роман (владелец)
 - Ты понимаешь был ли уже разговор, сколько сообщений, как давно
 - Используй этот контекст чтобы отвечать связно и естественно
+- Если Роман уже ответил человеку сам — не противоречь его словам, продолжай его линию
 - Если человек уже что-то спрашивал, не переспрашивай — продолжай диалог
 
 КРАСНЫЕ ЛИНИИ (НЕ ДЕЛАТЬ):
@@ -47,6 +71,12 @@ Wow-эффект — важная цель: посетитель должен д
 Эмодзи используй уместно (1-2 на сообщение макс).`;
 }
 
+const HISTORY_LABELS = {
+  client: '👤 Клиент',
+  owner: '👨‍💼 Роман (владелец)',
+  vika: '🤖 Вика'
+};
+
 function buildUserPrompt(senderInfo, text, history = [], isFirstTime = true) {
   const now = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
   let p = `⏰ СЕЙЧАС: ${now}
@@ -61,12 +91,12 @@ function buildUserPrompt(senderInfo, text, history = [], isFirstTime = true) {
     p += `
 📋 ИСТОРИЯ ПЕРЕПИСКИ (от старых к новым):
 `;
-    const sorted = [...history].reverse(); // history уже от новых к старым
-    for (const m of sorted) {
-      const time = m.ts 
+    // history приходит из state.js уже в хронологическом порядке (старые → новые)
+    for (const m of history) {
+      const time = m.ts
         ? new Date(m.ts).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' })
         : '??:??';
-      const who = m.from === 'client' ? '👤 Клиент' : '🤖 Вика';
+      const who = HISTORY_LABELS[m.from] || HISTORY_LABELS.vika;
       p += `[${time}] ${who}: ${m.text}
 `;
     }
@@ -79,33 +109,36 @@ ${text}`;
 
 export async function generateVikaResponse(senderInfo, messageText, history = [], isFirstTime = true) {
   if (DRY_RUN_VIKA) return { ok: true, response: 'Добрый день! Я Вика, помощница Романа.', dry_run: true };
-  if (!GW_API_KEY) {
-    console.error('GW_API_KEY not set');
+
+  const llm = resolveLlmConfig();
+  if (!llm.apiKey) {
+    console.error(`[Vika LLM] API key not set for ${llm.label} (LITELLM_API_KEY / GW_API_KEY)`);
     return { ok: false, error: 'API key not configured', response: 'Добрый день! Роман скоро ответит вам лично.' };
   }
   try {
-    const r = await fetch(`${GW_BASE_URL}/v1/chat/completions`, {
+    const r = await fetch(`${llm.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json', 'Authorization': `Bearer ${GW_API_KEY}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llm.apiKey}` },
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       body: JSON.stringify({
-        model: VIKA_MODEL,
+        model: llm.model,
         max_tokens: 300,
         messages: [
-          { role:'system', content: buildSystemPrompt() },
-          { role:'user', content: buildUserPrompt(senderInfo, messageText, history, isFirstTime) }
+          { role: 'system', content: buildSystemPrompt() },
+          { role: 'user', content: buildUserPrompt(senderInfo, messageText, history, isFirstTime) }
         ]
       })
     });
     const d = await r.json();
     if (d.error) {
-      console.error('OpenClaw Gateway error:', d.error);
+      console.error(`[Vika LLM] ${llm.label} error:`, d.error);
       return { ok: false, error: d.error.message || JSON.stringify(d.error), response: 'Добрый день! Роман скоро ответит вам лично.' };
     }
     const txt = d.choices?.[0]?.message?.content || 'Добрый день!';
-    console.log(`[Vika LLM] ${txt.slice(0,80)}...`);
+    console.log(`[Vika LLM] ${txt.slice(0, 80)}...`);
     return { ok: true, response: txt, model: d.model, usage: d.usage };
   } catch (err) {
-    console.error('OpenClaw Gateway fetch error:', err.message);
+    console.error(`[Vika LLM] ${llm.label} fetch error:`, err.message);
     return { ok: false, error: err.message, response: 'Добрый день! Роман скоро ответит вам лично.' };
   }
 }
