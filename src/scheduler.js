@@ -38,8 +38,8 @@ export function getDelayMinutes() {
     hour12: false
   });
   const h = parseInt(moscowTime);
-  // 08:00-18:00 → 5 мин (рабочий день), иначе 3 мин
-  return (h >= 8 && h < 18) ? 5 : 3;
+  // 08:00-18:00 → 2 мин (рабочий день), иначе 3 мин
+  return (h >= 8 && h < 18) ? 2 : 3;
 }
 
 /**
