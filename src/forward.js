@@ -60,8 +60,10 @@ export async function sendBusinessReply(businessConnectionId, chatId, text) {
 /**
  * Произвольное уведомление владельцу (control plane).
  * Уважает DRY_RUN через telegramApi.
+ *
+ * opts.buttons — inline-клавиатура: массив строк кнопок [{text, callback_data}]
  */
-export async function notifyOwnerText(text) {
+export async function notifyOwnerText(text, opts = {}) {
   const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
   const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
 
@@ -73,8 +75,68 @@ export async function notifyOwnerText(text) {
   return telegramApi(ONEINT_TOKEN, 'sendMessage', {
     chat_id: OWNER_CHAT_ID,
     text,
-    parse_mode: undefined
+    parse_mode: undefined,
+    ...(opts.buttons ? { reply_markup: { inline_keyboard: opts.buttons } } : {})
   });
+}
+
+/**
+ * Отредактировать ранее отправленное уведомление владельцу
+ * (debounce: серия сообщений от клиента → одно обновляемое уведомление).
+ */
+export async function editOwnerMessage(messageId, text, opts = {}) {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
+
+  if (!ONEINT_TOKEN || !OWNER_CHAT_ID || !messageId) {
+    return { ok: false, error: 'Not configured or no message id' };
+  }
+
+  return telegramApi(ONEINT_TOKEN, 'editMessageText', {
+    chat_id: OWNER_CHAT_ID,
+    message_id: messageId,
+    text,
+    parse_mode: undefined,
+    ...(opts.buttons ? { reply_markup: { inline_keyboard: opts.buttons } } : {})
+  });
+}
+
+/**
+ * Ответ на нажатие inline-кнопки (короткий toast владельцу).
+ */
+export async function answerCallback(callbackQueryId, text = '') {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  if (!ONEINT_TOKEN) return { ok: false, error: 'Token not configured' };
+  return telegramApi(ONEINT_TOKEN, 'answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text: text.slice(0, 190)
+  });
+}
+
+/**
+ * Long-polling апдейтов control-бота (для connectors/telegram/control.js).
+ * Не оборачивается в DRY_RUN: это ВХОДЯЩИЙ канал управления, а не отправка.
+ */
+export async function getControlUpdates(offset, timeoutSec = 25) {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  if (!ONEINT_TOKEN) return { ok: false, error: 'Token not configured' };
+
+  const url = `https://api.telegram.org/bot${ONEINT_TOKEN}/getUpdates`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout((timeoutSec + 10) * 1000),
+      body: JSON.stringify({
+        offset,
+        timeout: timeoutSec,
+        allowed_updates: ['message', 'callback_query']
+      })
+    });
+    return await response.json();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 /**

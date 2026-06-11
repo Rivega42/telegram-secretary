@@ -41,6 +41,8 @@ flowchart TB
             OCLAW["openclaw<br>сессии per-человек"]
         end
 
+        CTRL["connectors/telegram/control.js<br>команды и кнопки владельца"]
+        MODES["core/modes.js + drafts.js<br>режимы, черновики"]
         FWD["forward.js<br>отправка, DRY_RUN"]
         STATE[("state.js + STATE_DIR<br>история, маппинги,<br>persons, pending")]
     end
@@ -57,7 +59,11 @@ flowchart TB
     APP --> FWD
     SCHED --> FWD
     FWD -->|"ответ от имени владельца"| TGAPI
-    FWD -->|"уведомления, копии,<br>эскалации"| NOTIFY["Бот уведомлений<br>(личка владельца)"]
+    FWD -->|"уведомления, копии,<br>эскалации, черновики"| NOTIFY["Бот уведомлений<br>(личка владельца)"]
+    NOTIFY -->|"команды /on /off /vacation /draft,<br>кнопки (long-polling)"| CTRL
+    CTRL --> MODES
+    CTRL --> SCHED
+    APP --> MODES
     APP <--> STATE
 ```
 
@@ -148,7 +154,11 @@ telegram-метаданные (статистика), persons — платфор
 | `GET` | `/api/conversations` | Карта разговоров |
 | `GET` | `/api/pending` | Очередь отложенных |
 | `DELETE` | `/api/pending/:chatId` | Отменить отложенный ответ |
+| `GET` | `/api/mode` | Текущий режим (auto/off/vacation) и draft-флаг |
 | `GET` | `/health` | Health check |
+
+Управление режимами и черновиками — командами/кнопками в Telegram
+(см. `operations.md`), API даёт чтение состояния.
 
 Все пути `/api/*` требуют заголовок `X-Api-Key` (env `API_KEY`).
 

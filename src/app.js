@@ -35,19 +35,23 @@ import {
   getConversationHistory,
   appendConversationHistory
 } from './state.js';
-import { sendBusinessReply, notifyOwnerText } from './forward.js';
+import { sendBusinessReply, notifyOwnerText, editOwnerMessage } from './forward.js';
 import { respond as brainRespond } from './core/brain.js';
 import { loadPersona } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
 import { createEnvelope } from './core/envelope.js';
 import { truncate, usernameDisplay } from './core/format.js';
+import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
+import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import {
   setExecuteCallback,
   createPending,
   cancelPending,
   getAllPending,
-  getDelayMinutes
+  getDelayMinutes,
+  getPendingTask,
+  setPendingNotifyMessageId
 } from './scheduler.js';
 
 const HISTORY_CONTEXT_LIMIT = parseInt(process.env.HISTORY_CONTEXT_LIMIT || '25', 10);
@@ -81,6 +85,65 @@ function envelopeFromTask(task) {
 }
 
 /**
+ * Inline-кнопки под уведомлениями владельцу
+ */
+function pendingButtons(chatId, mappingId, personId) {
+  return [
+    [
+      { text: '⚡ Ответить сейчас', callback_data: `pend:now:${chatId}` },
+      { text: '✍️ Свой ответ', callback_data: `rep:${mappingId}` },
+      { text: '🚫 Отменить', callback_data: `pend:cancel:${chatId}` }
+    ],
+    [
+      { text: '🔴 Только мне', callback_data: `pol:escalate:${personId}` },
+      { text: '🔇 Игнорить', callback_data: `pol:ignore:${personId}` }
+    ]
+  ];
+}
+
+function escalationButtons(mappingId, personId) {
+  return [
+    [{ text: '✍️ Свой ответ', callback_data: `rep:${mappingId}` }],
+    [
+      { text: '🟢 Вернуть автоответ', callback_data: `pol:auto:${personId}` },
+      { text: '🔇 Игнорить', callback_data: `pol:ignore:${personId}` }
+    ]
+  ];
+}
+
+function draftButtons(mappingId) {
+  return [[
+    { text: '📤 Отправить', callback_data: `draft:ok:${mappingId}` },
+    { text: '🔄 Переписать', callback_data: `draft:rw:${mappingId}` },
+    { text: '🗑 Отбросить', callback_data: `draft:no:${mappingId}` }
+  ]];
+}
+
+/**
+ * Ручной/подтверждённый ответ клиенту: отмена pending, отправка, история.
+ * Используется /api/reply, кнопкой «Свой ответ» и draft-подтверждением.
+ */
+export async function sendManualReply(mappingId, text) {
+  const mapping = getMapping(mappingId);
+  if (!mapping) return { ok: false, error: `Mapping not found: ${mappingId}` };
+
+  cancelPending(mapping.business_chat_id, 'manual reply');
+
+  const result = await sendBusinessReply(
+    mapping.business_connection_id,
+    mapping.business_chat_id,
+    text
+  );
+  if (result.ok) {
+    appendConversationHistory(mappingId, 'vika', text);
+  }
+  logOutgoing(mappingId, text, result.ok);
+  return result.ok
+    ? { ok: true, message_id: result.result?.message_id, sent_to: mapping.sender_name }
+    : { ok: false, error: result.error || result.description };
+}
+
+/**
  * Callback для scheduler — сгенерировать и отправить ответ секретаря
  */
 export async function executeBrainResponse(task) {
@@ -111,6 +174,23 @@ export async function executeBrainResponse(task) {
     const brainResult = await brainRespond(envelope, { persona, person, history, isFirstTime });
     console.log(`[Execute] Brain result: ok=${brainResult.ok}${brainResult.dry_run ? ' (dry_run)' : ''}`);
 
+    // Draft-режим: клиенту ничего не уходит — черновик владельцу на подтверждение
+    if (getSettings().draft) {
+      saveDraft(task.mappingId, {
+        text: brainResult.text,
+        envelope,
+        person_id: person?.id,
+        original_text: task.originalText
+      });
+      await notifyOwnerText(
+        `📝 Черновик для ${usernameDisplay(envelope.identity)} (${envelope.identity.display_name}):\n\n` +
+        `«${brainResult.text}»\n\n` +
+        `На сообщение: «${truncate(task.originalText, 200)}»`,
+        { buttons: draftButtons(task.mappingId) }
+      );
+      return;
+    }
+
     const replyResult = await telegramBusiness.reply(envelope, brainResult.text);
     console.log(`[Execute] Business reply result: ok=${replyResult.ok}`);
 
@@ -132,6 +212,58 @@ export async function executeBrainResponse(task) {
   } catch (err) {
     console.error('[Execute] Error executing brain response:', err);
   }
+}
+
+/**
+ * Действия control plane (кнопки/команды владельца) — внедряются
+ * в connectors/telegram/control.js из server.js.
+ */
+export function createControlActions() {
+  return {
+    sendReplyToClient: (mappingId, text) => sendManualReply(mappingId, text),
+
+    approveDraft: async (mappingId) => {
+      const draft = getDraft(mappingId);
+      if (!draft) return 'Черновик не найден';
+      const result = await sendManualReply(mappingId, draft.text);
+      if (!result.ok) return `⚠️ ${result.error}`;
+      deleteDraft(mappingId);
+      return '📤 Отправлено';
+    },
+
+    rejectDraft: (mappingId) =>
+      deleteDraft(mappingId) ? '🗑 Черновик отброшен' : 'Черновик не найден',
+
+    requestRewrite: async (mappingId, note) => {
+      const draft = getDraft(mappingId);
+      if (!draft) {
+        await notifyOwnerText('Черновик не найден — возможно, уже отправлен или отброшен.');
+        return;
+      }
+      const persona = loadPersona();
+      const person = draft.person_id ? getPerson(draft.person_id) : null;
+      const history = getConversationHistory(mappingId, HISTORY_CONTEXT_LIMIT);
+      const brainResult = await brainRespond(draft.envelope, {
+        persona, person, history,
+        isFirstTime: false,
+        rewrite: { previous: draft.text, note }
+      });
+      saveDraft(mappingId, { ...draft, text: brainResult.text });
+      await notifyOwnerText(
+        `📝 Новый вариант:\n\n«${brainResult.text}»`,
+        { buttons: draftButtons(mappingId) }
+      );
+    }
+  };
+}
+
+/**
+ * Человекочитаемая задержка для уведомлений
+ */
+function delayLabel(delayMinutes) {
+  return delayMinutes < 1
+    ? `${Math.round(delayMinutes * 60)} сек`
+    : `${Math.round(delayMinutes)} мин`;
 }
 
 export function createApp() {
@@ -296,7 +428,8 @@ export function createApp() {
       console.log(`[Policy] escalate: person ${person.id} → owner`);
       const notify = await notifyOwnerText(
         `🔴 [Эскалация → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}):\n` +
-        `«${truncate(historyText, 300)}»\n\nАвтоответ отключён политикой контакта — ответь сам.`
+        `«${truncate(historyText, 300)}»\n\nАвтоответ отключён политикой контакта — ответь сам.`,
+        { buttons: escalationButtons(mapping.mappingId, person.id) }
       );
       return res.json({
         ok: true, type: 'business_message', person_id: person.id,
@@ -309,7 +442,8 @@ export function createApp() {
       console.log(`[Policy] non-text message from ${person.id} → escalate to owner`);
       const notify = await notifyOwnerText(
         `📎 [Не-текст → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}): ${historyText}\n\n` +
-        `Автоответ на вложения не поддерживается — ответь сам.`
+        `Автоответ на вложения не поддерживается — ответь сам.`,
+        { buttons: [[{ text: '✍️ Свой ответ', callback_data: `rep:${mapping.mappingId}` }]] }
       );
       return res.json({
         ok: true, type: 'business_message', person_id: person.id,
@@ -317,20 +451,49 @@ export function createApp() {
       });
     }
 
-    // Политика auto: отложенный ответ
-    const delayMinutes = getDelayMinutes();
+    const settings = getSettings();
+
+    // Режим off: «я свободен» — только уведомление, без автоответа
+    if (settings.mode === 'off') {
+      const notify = await notifyOwnerText(
+        `📨 [${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}):\n` +
+        `«${truncate(envelope.text, 300)}»\n\n⏸ Автоответ выключен (/on — включить)`,
+        { buttons: escalationButtons(mapping.mappingId, person.id) }
+      );
+      return res.json({
+        ok: true, type: 'business_message', mapping_id: mapping.mappingId,
+        person_id: person.id, mode: 'off', owner_notified: notify.ok
+      });
+    }
+
+    // Политика auto: отложенный ответ (vacation — короткая задержка)
+    const prevTask = getPendingTask(businessChatId);
     const pendingInfo = createPending(mapping, senderInfo, envelope.text, {
       envelope,
-      personId: person.id
+      personId: person.id,
+      delayMs: settings.mode === 'vacation' ? VACATION_DELAY_SECONDS * 1000 : undefined,
+      notifyMessageId: prevTask?.notifyMessageId
     });
 
-    const notifyResult = await notifyOwnerText(
+    const notifyText =
       `📨 [Pending → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}):\n` +
       `«${truncate(envelope.text, 300)}»\n\n` +
-      `⏱ Отвечу через ${delayMinutes} мин если ты не ответишь сам`
-    );
+      `⏱ Отвечу через ${delayLabel(pendingInfo.delayMinutes)} если ты не ответишь сам` +
+      (prevTask ? '\n(серия сообщений — таймер перезапущен)' : '');
+    const buttons = pendingButtons(businessChatId, mapping.mappingId, person.id);
 
-    console.log(`Pending created: ${pendingInfo.mappingId}, delay ${delayMinutes} min, notify ok=${notifyResult.ok}`);
+    // Debounce: серия сообщений от одного человека — одно обновляемое уведомление
+    let notifyResult;
+    if (prevTask?.notifyMessageId) {
+      notifyResult = await editOwnerMessage(prevTask.notifyMessageId, notifyText, { buttons });
+    } else {
+      notifyResult = await notifyOwnerText(notifyText, { buttons });
+      if (notifyResult.ok && notifyResult.result?.message_id) {
+        setPendingNotifyMessageId(businessChatId, notifyResult.result.message_id);
+      }
+    }
+
+    console.log(`Pending created: ${pendingInfo.mappingId}, delay ${pendingInfo.delayMinutes} min, notify ok=${notifyResult.ok}`);
 
     return res.json({
       ok: true,
@@ -338,7 +501,7 @@ export function createApp() {
       mapping_id: mapping.mappingId,
       person_id: person.id,
       pending: true,
-      delay_minutes: delayMinutes,
+      delay_minutes: pendingInfo.delayMinutes,
       owner_notified: notifyResult.ok
     });
   }
@@ -354,29 +517,19 @@ export function createApp() {
       return res.status(400).json({ error: 'mapping_id and text required' });
     }
 
-    const mapping = getMapping(mapping_id);
-    if (!mapping) {
-      return res.status(404).json({ error: `Mapping not found: ${mapping_id}` });
-    }
+    console.log(`Replying to ${mapping_id}: ${truncate(text, 50)}`);
+    const result = await sendManualReply(mapping_id, text);
 
-    console.log(`Replying to ${mapping_id}: ${text.slice(0, 50)}...`);
-    cancelPending(mapping.business_chat_id, 'manual reply via API');
+    if (result.ok) return res.json(result);
+    const status = result.error?.startsWith('Mapping not found') ? 404 : 500;
+    return res.status(status).json(result);
+  });
 
-    const result = await sendBusinessReply(
-      mapping.business_connection_id,
-      mapping.business_chat_id,
-      text
-    );
-
-    if (result.ok) {
-      appendConversationHistory(mapping_id, 'vika', text);
-    }
-    logOutgoing(mapping_id, text, result.ok);
-
-    if (result.ok) {
-      return res.json({ ok: true, message_id: result.result?.message_id, sent_to: mapping.sender_name });
-    }
-    return res.status(500).json({ ok: false, error: result.error || result.description });
+  /**
+   * API: режим работы (auto/off/vacation + draft) — то же, что команды боту
+   */
+  app.get('/api/mode', (req, res) => {
+    res.json(getSettings());
   });
 
   /**

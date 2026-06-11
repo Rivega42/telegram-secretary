@@ -33,9 +33,11 @@ docker compose --profile gateway up -d    # прокси + OpenClaw Gateway
 - `src/app.js` — Express: webhook `/tg/business-webhook`, политики, админ-API `/api/*` (авторизация `X-Api-Key`)
 - `src/scheduler.js` — очередь отложенных ответов, persistence в `pending.json`
 - `src/core/` — ядро: `envelope.js` (конверт+capabilities), `brain.js` (интерфейс мозга),
-  `persona.js` (персона из `persona/`), `identity.js` (персоны/политики), `instances.js` (реестр+routing)
+  `persona.js` (персона из `persona/`), `identity.js` (персоны/политики), `instances.js` (реестр+routing),
+  `modes.js` (режимы /on /off /vacation + draft), `drafts.js` (черновики), `prompt.js`, `format.js`
 - `src/brains/` — драйверы: `stateless-llm.js` (OpenAI-совместимый endpoint), `openclaw.js` (сессии per-человек)
 - `src/connectors/telegram/business.js` — Telegram Business ↔ конверт (telegram-поля не выходят за коннектор)
+- `src/connectors/telegram/control.js` — control plane: команды/кнопки владельца (long-polling бота уведомлений)
 - `src/state.js` — файловый стейт в `STATE_DIR`: контакты, маппинги, история (`conversations/*.jsonl`)
 - `src/forward.js` — отправка через Telegram API, уважает `DRY_RUN`
 - `persona/` — конфиг персоны (persona.json, base.md, dm.md, public.md)

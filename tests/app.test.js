@@ -177,3 +177,74 @@ test('webhook: невалидный апдейт → 400', async () => {
   const r = await postWebhook({ foo: 'bar' });
   assert.equal(r.status, 400);
 });
+
+test('режим off: уведомление без pending', async () => {
+  const { setMode } = await import('../src/core/modes.js');
+  setMode('off');
+  const before = (await api('/api/pending')).body.count;
+  const { body } = await postWebhook(businessMessage(150, 'есть кто живой?'));
+  assert.equal(body.mode, 'off');
+  assert.equal(body.pending, undefined);
+  assert.equal((await api('/api/pending')).body.count, before);
+  setMode('auto');
+});
+
+test('режим vacation: pending с короткой задержкой', async () => {
+  const { setMode } = await import('../src/core/modes.js');
+  setMode('vacation');
+  const { body } = await postWebhook(businessMessage(151, 'срочно!'));
+  assert.equal(body.pending, true);
+  assert.ok(body.delay_minutes < 1, `delay ${body.delay_minutes} должен быть < 1 мин`);
+  setMode('auto');
+  await api('/api/pending/1151', { method: 'DELETE' }); // прибрать быстрый таймер
+});
+
+test('debounce: серия сообщений — один pending, уведомление редактируется', async () => {
+  const before = (await api('/api/pending')).body.count;
+  await postWebhook(businessMessage(152, 'первое'));
+  await postWebhook(businessMessage(152, 'второе'));
+  await postWebhook(businessMessage(152, 'третье'));
+  const after = (await api('/api/pending')).body.count;
+  assert.equal(after, before + 1); // не 3 задачи, а одна (заменяется)
+});
+
+test('/api/mode: текущие настройки доступны', async () => {
+  const r = await api('/api/mode');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'auto');
+  assert.equal(typeof r.body.draft, 'boolean');
+});
+
+test('draft-режим: ответ не уходит клиенту, создаётся черновик; approve отправляет', async () => {
+  const { setDraft } = await import('../src/core/modes.js');
+  const { getDraft } = await import('../src/core/drafts.js');
+  const { executeBrainResponse, createControlActions } = await import('../src/app.js');
+
+  // создаём диалог и забираем pending-задачу
+  const first = await postWebhook(businessMessage(160, 'сколько стоит?'));
+  const mappingId = first.body.mapping_id;
+
+  setDraft(true);
+  // исполняем pending немедленно (вместо ожидания таймера)
+  const { executePendingNow } = await import('../src/scheduler.js');
+  const ran = await executePendingNow(1160);
+  assert.equal(ran, true);
+
+  // черновик создан, в истории НЕТ ответа секретаря
+  const draft = getDraft(mappingId);
+  assert.ok(draft, 'черновик должен существовать');
+  assert.ok(draft.text.length > 0);
+
+  // подтверждение владельцем — уходит клиенту (DRY_RUN) и чистит черновик
+  const actions = createControlActions();
+  const toast = await actions.approveDraft(mappingId);
+  assert.equal(toast, '📤 Отправлено');
+  assert.equal(getDraft(mappingId), null);
+
+  // история содержит подтверждённый ответ
+  const convFile = path.join(TMP, 'conversations', `${mappingId}.jsonl`);
+  const lines = fs.readFileSync(convFile, 'utf-8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.ok(lines.some(l => l.from === 'vika' && l.text === draft.text));
+
+  setDraft(false);
+});

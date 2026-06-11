@@ -25,7 +25,7 @@ import { buildSystemPrompt } from '../core/persona.js';
 import { buildUserPrompt } from '../core/prompt.js';
 
 export async function respond(envelope, ctx, instance) {
-  const { persona, person, history = [], isFirstTime = true } = ctx;
+  const { persona, person, history = [], isFirstTime = true, rewrite = null } = ctx;
 
   const stateful = instance.stateful !== false;
   const sendSystem = instance.send_system !== false;
@@ -44,7 +44,8 @@ export async function respond(envelope, ctx, instance) {
       // stateful-агент сам помнит диалог — историю не дублируем
       history: stateful ? [] : history,
       persona,
-      isFirstTime
+      isFirstTime,
+      rewrite
     })
   });
 

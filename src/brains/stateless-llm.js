@@ -11,11 +11,11 @@ import { buildSystemPrompt } from '../core/persona.js';
 import { buildUserPrompt } from '../core/prompt.js';
 
 export async function respond(envelope, ctx, instance) {
-  const { persona, history = [], isFirstTime = true } = ctx;
+  const { persona, history = [], isFirstTime = true, rewrite = null } = ctx;
   const result = await chatCompletions(instance, {
     messages: [
       { role: 'system', content: buildSystemPrompt(persona, envelope.surface) },
-      { role: 'user', content: buildUserPrompt(envelope, { history, persona, isFirstTime }) }
+      { role: 'user', content: buildUserPrompt(envelope, { history, persona, isFirstTime, rewrite }) }
     ],
     maxTokens: instance.max_tokens || 300
   });

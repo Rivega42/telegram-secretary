@@ -22,8 +22,9 @@ export function historyLabel(from, persona) {
 
 /**
  * Контекст отправителя + история + текущее сообщение.
+ * rewrite: { previous, note } — режим переписывания черновика по указанию владельца.
  */
-export function buildUserPrompt(envelope, { history = [], persona, isFirstTime = true }) {
+export function buildUserPrompt(envelope, { history = [], persona, isFirstTime = true, rewrite = null }) {
   const now = new Date().toLocaleString('ru-RU', { timeZone: process.env.TZ_DISPLAY || 'Europe/Moscow' });
   let p = `⏰ СЕЙЧАС: ${now}
 
@@ -46,5 +47,11 @@ export function buildUserPrompt(envelope, { history = [], persona, isFirstTime =
     p += block + '---\n\n';
   }
   p += `📩 ТЕКУЩЕЕ СООБЩЕНИЕ ОТ КЛИЕНТА:\n${envelope.text}`;
+
+  if (rewrite) {
+    p += `\n\n✏️ ТВОЙ ПРЕДЫДУЩИЙ ЧЕРНОВИК ОТВЕТА:\n${rewrite.previous}` +
+         `\n\n📣 УКАЗАНИЕ ВЛАДЕЛЬЦА — ПЕРЕПИШИ ОТВЕТ С УЧЁТОМ:\n${rewrite.note}` +
+         `\n\nНапиши новый вариант ответа целиком.`;
+  }
   return p;
 }

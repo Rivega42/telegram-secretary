@@ -56,10 +56,11 @@ function savePendingToFile() {
       originalText: task.originalText,
       scheduledAt: task.scheduledAt,
       delayMs: task.delayMs,
-      // новые поля (этап 1): конверт и персона; старые pending.json без них
-      // корректно обрабатываются при выполнении (см. app.js)
+      // новые поля (этапы 1–2): конверт, персона, id уведомления; старые
+      // pending.json без них корректно обрабатываются при выполнении (см. app.js)
       envelope: task.envelope,
-      personId: task.personId
+      personId: task.personId,
+      notifyMessageId: task.notifyMessageId
     };
   }
   try {
@@ -117,7 +118,11 @@ export function loadPendingFromFile() {
 
 /**
  * Создать pending task.
- * extra: { envelope, personId } — конверт сообщения и ID персоны (этап 1)
+ * extra: {
+ *   envelope, personId      — конверт сообщения и ID персоны (этап 1)
+ *   delayMs                 — переопределение задержки (режим vacation)
+ *   notifyMessageId         — id уведомления владельцу (debounce-редактирование)
+ * }
  */
 export function createPending(mapping, senderInfo, originalText, extra = {}) {
   const chatId = String(mapping.business_chat_id);
@@ -128,8 +133,8 @@ export function createPending(mapping, senderInfo, originalText, extra = {}) {
     cancelPending(chatId, 'replaced by new message');
   }
 
-  const delayMinutes = getDelayMinutes();
-  const delayMs = delayMinutes * 60 * 1000;
+  const delayMs = extra.delayMs ?? getDelayMinutes() * 60 * 1000;
+  const delayMinutes = Math.round(delayMs / 60000 * 10) / 10;
   const scheduledAt = new Date().toISOString();
 
   const timeoutHandle = setTimeout(() => {
@@ -148,6 +153,7 @@ export function createPending(mapping, senderInfo, originalText, extra = {}) {
     delayMs,
     envelope: extra.envelope,
     personId: extra.personId,
+    notifyMessageId: extra.notifyMessageId,
     timeoutHandle
   };
   
@@ -205,6 +211,36 @@ async function executePending(chatId) {
   } else {
     console.error('[Scheduler] No execute callback set!');
   }
+}
+
+/**
+ * Выполнить pending немедленно (кнопка «Ответить сейчас» у владельца).
+ */
+export async function executePendingNow(chatId) {
+  const chatIdStr = String(chatId);
+  const task = pendingTasks.get(chatIdStr);
+  if (!task) return false;
+  clearTimeout(task.timeoutHandle);
+  await executePending(chatIdStr);
+  return true;
+}
+
+/**
+ * Получить pending-задачу чата (для control plane).
+ */
+export function getPendingTask(chatId) {
+  return pendingTasks.get(String(chatId)) || null;
+}
+
+/**
+ * Обновить сохранённый id уведомления владельцу (debounce-редактирование).
+ */
+export function setPendingNotifyMessageId(chatId, messageId) {
+  const task = pendingTasks.get(String(chatId));
+  if (!task) return false;
+  task.notifyMessageId = messageId;
+  savePendingToFile();
+  return true;
 }
 
 /**

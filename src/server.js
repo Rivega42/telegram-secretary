@@ -6,8 +6,10 @@
  */
 
 import 'dotenv/config';
-import { createApp } from './app.js';
+import { createApp, createControlActions } from './app.js';
 import { loadPendingFromFile, getDelayMinutes } from './scheduler.js';
+import { startControlLoop } from './connectors/telegram/control.js';
+import { getSettings } from './core/modes.js';
 
 const PORT = process.env.PORT || 18792;
 
@@ -49,6 +51,12 @@ const app = createApp();
 // Восстановить отложенные ответы, пережившие рестарт
 loadPendingFromFile();
 
+// Control plane: команды и кнопки владельца через бота уведомлений.
+// В DRY_RUN не поллим (токены обычно фиктивные); CONTROL_POLLING=false — выключить.
+if (process.env.CONTROL_POLLING !== 'false' && process.env.DRY_RUN !== 'true') {
+  startControlLoop(createControlActions());
+}
+
 app.listen(PORT, () => {
   console.log(`\n🚀 Secretary Proxy started on port ${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/health`);
@@ -59,6 +67,8 @@ app.listen(PORT, () => {
   console.log(`   Conversations: GET http://localhost:${PORT}/api/conversations`);
   console.log(`   Pending: GET http://localhost:${PORT}/api/pending`);
   console.log(`\n   Brain driver: ${process.env.BRAIN_DRIVER || 'stateless-llm'}`);
+  const settings = getSettings();
+  console.log(`   Mode: ${settings.mode}${settings.draft ? ' + draft' : ''} (управление: /on /off /vacation /draft /status в боте уведомлений)`);
   console.log(`   DRY_RUN: ${process.env.DRY_RUN === 'true' ? 'YES' : 'NO'}`);
   console.log(`   State dir: ${process.env.STATE_DIR || './state'}`);
   console.log(`   Persona dir: ${process.env.PERSONA_DIR || './persona'}`);
