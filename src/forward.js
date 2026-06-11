@@ -114,6 +114,36 @@ export async function answerCallback(callbackQueryId, text = '') {
 }
 
 /**
+ * Реалистичность ответа в business-чате: отметить прочитанным и показать
+ * «печатает…» пропорционально длине ответа (с потолком). Уважает DRY_RUN.
+ * Ошибки не критичны — best effort.
+ */
+export async function simulateTyping(businessConnectionId, chatId, messageId, textLength = 0) {
+  if (process.env.TYPING_SIMULATION === 'false') return;
+  const BUSINESS_TOKEN = process.env.BUSINESS_BOT_TOKEN;
+  if (!BUSINESS_TOKEN) return;
+
+  if (messageId) {
+    await telegramApi(BUSINESS_TOKEN, 'readBusinessMessage', {
+      business_connection_id: businessConnectionId,
+      chat_id: chatId,
+      message_id: messageId
+    });
+  }
+
+  await telegramApi(BUSINESS_TOKEN, 'sendChatAction', {
+    business_connection_id: businessConnectionId,
+    chat_id: chatId,
+    action: 'typing'
+  });
+
+  if (process.env.DRY_RUN === 'true') return;
+  // ~200 знаков в минуту «печати», потолок 8 сек
+  const ms = Math.min(8000, Math.max(1500, textLength * 50));
+  await new Promise(r => setTimeout(r, ms));
+}
+
+/**
  * Ответ в группе/обсуждении канала от имени community-бота (он же бот уведомлений).
  * Уважает DRY_RUN через telegramApi.
  */

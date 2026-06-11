@@ -35,7 +35,7 @@ import {
   getConversationHistory,
   appendConversationHistory
 } from './state.js';
-import { sendBusinessReply, notifyOwnerText, editOwnerMessage, sendGroupReply } from './forward.js';
+import { sendBusinessReply, notifyOwnerText, editOwnerMessage, sendGroupReply, simulateTyping } from './forward.js';
 import { respond as brainRespond } from './core/brain.js';
 import { loadPersona } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
@@ -191,6 +191,14 @@ export async function executeBrainResponse(task) {
       return;
     }
 
+    // Реалистичность: прочитано + «печатает…» перед отправкой
+    await simulateTyping(
+      envelope.raw.business_connection_id,
+      envelope.raw.chat_id,
+      envelope.raw.message_id,
+      brainResult.text.length
+    );
+
     const replyResult = await telegramBusiness.reply(envelope, brainResult.text);
     console.log(`[Execute] Business reply result: ok=${replyResult.ok}`);
 
@@ -233,6 +241,17 @@ export function createControlActions() {
         logOutgoing(draftKey, draft.text, true);
         deleteDraft(draftKey);
         return '📤 Опубликовано';
+      }
+
+      // Пост в канал (автопостинг)
+      if (draft.kind === 'channel') {
+        const result = await sendGroupReply(draft.chat_id, null, draft.text);
+        if (!result.ok) return `⚠️ ${result.error || result.description}`;
+        const { recordPosted } = await import('./connectors/telegram/channel.js');
+        recordPosted(draft.topic || '', draft.text);
+        logOutgoing(draftKey, draft.text, true);
+        deleteDraft(draftKey);
+        return '📤 Опубликовано в канал';
       }
 
       const result = await sendManualReply(draftKey, draft.text);

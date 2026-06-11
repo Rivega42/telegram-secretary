@@ -38,6 +38,8 @@ docker compose --profile gateway up -d    # прокси + OpenClaw Gateway
 - `src/brains/` — драйверы: `stateless-llm.js` (OpenAI-совместимый endpoint), `openclaw.js` (сессии per-человек)
 - `src/connectors/telegram/business.js` — Telegram Business ↔ конверт (telegram-поля не выходят за коннектор)
 - `src/connectors/telegram/control.js` — control plane: команды/кнопки владельца (long-polling бота уведомлений)
+- `src/connectors/telegram/community.js` — комментарии канала, Q&A в группах, лид-воронка
+- `src/connectors/telegram/channel.js` — автопостинг по контент-плану (только через черновик)
 - `src/state.js` — файловый стейт в `STATE_DIR`: контакты, маппинги, история (`conversations/*.jsonl`)
 - `src/forward.js` — отправка через Telegram API, уважает `DRY_RUN`
 - `persona/` — конфиг персоны (persona.json, base.md, dm.md, public.md)

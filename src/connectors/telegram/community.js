@@ -31,6 +31,7 @@ import { allowReply } from '../../core/ratelimit.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate, usernameDisplay } from '../../core/format.js';
 import { sendGroupReply, notifyOwnerText } from '../../forward.js';
+import { getConversationHistory, appendConversationHistory } from '../../state.js';
 
 const PUBLIC_AUTO_REPLY = () => process.env.PUBLIC_AUTO_REPLY === 'true';
 
@@ -153,4 +154,76 @@ export async function handleGroupMessage(msg, botInfo) {
   return sendResult.ok
     ? { action: 'replied' }
     : { action: 'skip', reason: `send-failed: ${sendResult.error || sendResult.description}` };
+}
+
+/**
+ * Лид-воронка (#20): незнакомец пишет в личку бота (например, по кнопке
+ * «Спросить ассистента» под постом: t.me/<bot>?start=post_<id>).
+ *
+ * Бот отвечает сразу (это явный бот — раскрытие очевидно, surface group =
+ * публичная персона), ведёт историю lead-диалога и уведомляет владельца
+ * о новом/горячем лиде с источником из deep-link.
+ */
+export async function handleLeadMessage(msg) {
+  if (!msg.chat || msg.chat.type !== 'private' || !msg.from) {
+    return { action: 'skip', reason: 'not-private' };
+  }
+  const text = msg.text || msg.caption || '';
+  if (!text) return { action: 'skip', reason: 'non-text' };
+
+  const person = resolvePerson({
+    platform: 'telegram',
+    platformUserId: msg.from.id,
+    displayName: [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' '),
+    username: msg.from.username || null
+  });
+  if (person.policy === 'ignore') return { action: 'skip', reason: 'policy-ignore' };
+
+  if (!allowReply(`lead:${msg.chat.id}`, msg.from.id)) {
+    return { action: 'skip', reason: 'rate-limit' };
+  }
+
+  // deep-link источник: /start post_123
+  const startMatch = text.match(/^\/start\s+(\S+)/);
+  const source = startMatch ? startMatch[1] : null;
+  const leadKey = `lead-${msg.from.id}`;
+  const userText = startMatch ? 'Здравствуйте!' : text;
+
+  appendConversationHistory(leadKey, 'client', source ? `[пришёл с: ${source}] ${userText}` : userText);
+  const history = getConversationHistory(leadKey, 25);
+
+  const persona = loadPersona();
+  const envelope = createEnvelope({
+    platform: 'telegram',
+    surface: 'group', // публичная персона: это официальный бот, без флирта, с раскрытием
+    identity: {
+      platform_user_id: msg.from.id,
+      username: msg.from.username || null,
+      display_name: person.display_name
+    },
+    threadKey: `telegram:lead:${msg.chat.id}`,
+    text: userText,
+    raw: { chat_id: msg.chat.id }
+  });
+
+  const brainResult = await brainRespond(envelope, {
+    persona, person, history, isFirstTime: history.length <= 1
+  });
+
+  const sendResult = await sendGroupReply(msg.chat.id, null, brainResult.text);
+  if (sendResult.ok) {
+    appendConversationHistory(leadKey, 'vika', brainResult.text);
+  }
+
+  // Уведомление владельцу: новый лид или продолжение диалога
+  if (person.isNew || source || history.length <= 1) {
+    await notifyOwnerText(
+      `🔥 Лид в боте: ${usernameDisplay(envelope.identity)} (${person.display_name || '—'})` +
+      (source ? `\nИсточник: ${source}` : '') +
+      `\n«${truncate(text, 200)}»\n\nОтветила: «${truncate(brainResult.text, 200)}»`,
+      { buttons: [[{ text: '🔇 Игнорить', callback_data: `pol:ignore:${person.id}` }]] }
+    );
+  }
+
+  return { action: 'lead-replied', person_id: person.id, source };
 }

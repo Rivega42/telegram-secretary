@@ -21,7 +21,8 @@ import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo }
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
 import { setPersonPolicy, POLICIES } from '../../core/identity.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
-import { handleGroupMessage } from './community.js';
+import { handleGroupMessage, handleLeadMessage } from './community.js';
+import { generatePost } from './channel.js';
 
 const OWNER_CHAT_ID = () => String(process.env.OWNER_CHAT_ID || '');
 
@@ -155,9 +156,22 @@ export async function handleControlUpdate(update, actions, botInfo = {}) {
     return;
   }
 
-  // Личка control-бота — только владелец
-  if (String(msg.from?.id) !== OWNER_CHAT_ID()) return;
+  // Личка control-бота: не владелец → лид-воронка (этап 3, #20)
+  if (String(msg.from?.id) !== OWNER_CHAT_ID()) {
+    await handleLeadMessage(msg);
+    return;
+  }
   const text = msg.text || '';
+
+  // /post [тема] — сгенерировать пост в канал вне расписания
+  if (text.startsWith('/post')) {
+    const topic = text.replace(/^\/post(@\w+)?\s*/, '').trim() || null;
+    const result = await generatePost(topic);
+    if (!result.ok && result.error?.includes('CHANNEL_ID')) {
+      await notifyOwnerText('⚠️ Автопостинг не настроен: задай CHANNEL_ID в .env (бот — админ канала).');
+    }
+    return;
+  }
 
   // Команды
   if (text.startsWith('/')) {

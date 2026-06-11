@@ -9,7 +9,9 @@ import 'dotenv/config';
 import { createApp, createControlActions } from './app.js';
 import { loadPendingFromFile, getDelayMinutes } from './scheduler.js';
 import { startControlLoop } from './connectors/telegram/control.js';
+import { startPostingSchedule } from './connectors/telegram/channel.js';
 import { getSettings } from './core/modes.js';
+import { rotateLogs } from './state.js';
 
 const PORT = process.env.PORT || 18792;
 
@@ -51,11 +53,18 @@ const app = createApp();
 // Восстановить отложенные ответы, пережившие рестарт
 loadPendingFromFile();
 
+// Ротация логов (содержат переписки): при старте и раз в сутки
+rotateLogs();
+setInterval(rotateLogs, 24 * 60 * 60 * 1000).unref();
+
 // Control plane: команды и кнопки владельца через бота уведомлений.
 // В DRY_RUN не поллим (токены обычно фиктивные); CONTROL_POLLING=false — выключить.
 if (process.env.CONTROL_POLLING !== 'false' && process.env.DRY_RUN !== 'true') {
   startControlLoop(createControlActions());
 }
+
+// Автопостинг канала (включается, если заданы CHANNEL_ID и POSTING_TIMES)
+startPostingSchedule(createControlActions());
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Secretary Proxy started on port ${PORT}`);

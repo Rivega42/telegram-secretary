@@ -219,6 +219,31 @@ export function logOutgoing(mappingId, text, success) {
 }
 
 /**
+ * Ротация логов: log-YYYY-MM-DD.jsonl старше LOG_TTL_DAYS удаляются
+ * (логи содержат тексты переписок — не храним вечно).
+ * Вызывается при старте и раз в сутки (см. server.js).
+ */
+export function rotateLogs(ttlDays = parseInt(process.env.LOG_TTL_DAYS || '30', 10)) {
+  if (ttlDays <= 0) return 0; // 0 или меньше — ротация выключена
+  const cutoff = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  try {
+    for (const file of fs.readdirSync(STATE_DIR)) {
+      const m = file.match(/^log-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (!m) continue;
+      if (new Date(m[1]).getTime() < cutoff) {
+        fs.unlinkSync(path.join(STATE_DIR, file));
+        removed++;
+      }
+    }
+    if (removed) console.log(`[State] Ротация логов: удалено файлов: ${removed} (старше ${ttlDays} дн.)`);
+  } catch (err) {
+    console.error('[State] Ошибка ротации логов:', err.message);
+  }
+  return removed;
+}
+
+/**
  * === CONVERSATION HISTORY ===
  * Хранит историю сообщений для каждого mapping_id в отдельном JSONL файле
  */
