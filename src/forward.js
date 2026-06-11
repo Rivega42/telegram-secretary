@@ -114,6 +114,31 @@ export async function answerCallback(callbackQueryId, text = '') {
 }
 
 /**
+ * Ответ в группе/обсуждении канала от имени community-бота (он же бот уведомлений).
+ * Уважает DRY_RUN через telegramApi.
+ */
+export async function sendGroupReply(chatId, replyToMessageId, text) {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  if (!ONEINT_TOKEN) {
+    return { ok: false, error: 'Token not configured' };
+  }
+  return telegramApi(ONEINT_TOKEN, 'sendMessage', {
+    chat_id: chatId,
+    text,
+    ...(replyToMessageId ? { reply_to_message_id: replyToMessageId, allow_sending_without_reply: true } : {})
+  });
+}
+
+/**
+ * getMe community/control-бота (username для детекта упоминаний).
+ */
+export async function getControlBotInfo() {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  if (!ONEINT_TOKEN) return { ok: false, error: 'Token not configured' };
+  return telegramApi(ONEINT_TOKEN, 'getMe');
+}
+
+/**
  * Long-polling апдейтов control-бота (для connectors/telegram/control.js).
  * Не оборачивается в DRY_RUN: это ВХОДЯЩИЙ канал управления, а не отправка.
  */

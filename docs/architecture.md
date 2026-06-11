@@ -42,6 +42,7 @@ flowchart TB
         end
 
         CTRL["connectors/telegram/control.js<br>команды и кнопки владельца"]
+        COMM["connectors/telegram/community.js<br>комментарии канала, Q&A в чате<br>(+ rate-limit, публичные черновики)"]
         MODES["core/modes.js + drafts.js<br>режимы, черновики"]
         FWD["forward.js<br>отправка, DRY_RUN"]
         STATE[("state.js + STATE_DIR<br>история, маппинги,<br>persons, pending")]
@@ -61,6 +62,10 @@ flowchart TB
     FWD -->|"ответ от имени владельца"| TGAPI
     FWD -->|"уведомления, копии,<br>эскалации, черновики"| NOTIFY["Бот уведомлений<br>(личка владельца)"]
     NOTIFY -->|"команды /on /off /vacation /draft,<br>кнопки (long-polling)"| CTRL
+    GROUP(["Discussion-группа канала /<br>групповой чат"]) -->|"тот же long-polling"| CTRL
+    CTRL -->|"сообщения групп"| COMM
+    COMM --> BRAIN
+    COMM -->|"черновик владельцу"| FWD
     CTRL --> MODES
     CTRL --> SCHED
     APP --> MODES

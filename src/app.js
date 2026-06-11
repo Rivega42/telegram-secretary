@@ -35,7 +35,7 @@ import {
   getConversationHistory,
   appendConversationHistory
 } from './state.js';
-import { sendBusinessReply, notifyOwnerText, editOwnerMessage } from './forward.js';
+import { sendBusinessReply, notifyOwnerText, editOwnerMessage, sendGroupReply } from './forward.js';
 import { respond as brainRespond } from './core/brain.js';
 import { loadPersona } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
@@ -222,12 +222,22 @@ export function createControlActions() {
   return {
     sendReplyToClient: (mappingId, text) => sendManualReply(mappingId, text),
 
-    approveDraft: async (mappingId) => {
-      const draft = getDraft(mappingId);
+    approveDraft: async (draftKey) => {
+      const draft = getDraft(draftKey);
       if (!draft) return 'Черновик не найден';
-      const result = await sendManualReply(mappingId, draft.text);
+
+      // Публичный черновик (комментарий/чат) — ответ в группу
+      if (draft.kind === 'community') {
+        const result = await sendGroupReply(draft.chat_id, draft.reply_to, draft.text);
+        if (!result.ok) return `⚠️ ${result.error || result.description}`;
+        logOutgoing(draftKey, draft.text, true);
+        deleteDraft(draftKey);
+        return '📤 Опубликовано';
+      }
+
+      const result = await sendManualReply(draftKey, draft.text);
       if (!result.ok) return `⚠️ ${result.error}`;
-      deleteDraft(mappingId);
+      deleteDraft(draftKey);
       return '📤 Отправлено';
     },
 

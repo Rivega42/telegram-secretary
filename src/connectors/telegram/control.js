@@ -17,10 +17,11 @@
  * startControlLoop — только транспорт.
  */
 
-import { getControlUpdates, answerCallback, notifyOwnerText } from '../../forward.js';
+import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo } from '../../forward.js';
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
 import { setPersonPolicy, POLICIES } from '../../core/identity.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
+import { handleGroupMessage } from './community.js';
 
 const OWNER_CHAT_ID = () => String(process.env.OWNER_CHAT_ID || '');
 
@@ -127,8 +128,9 @@ export async function handleCallback(data, actions) {
 
 /**
  * Обработать один update control-бота. Транспортно-независимо (тестируемо).
+ * botInfo: { botUsername, botId } — для публичных триггеров (упоминания).
  */
-export async function handleControlUpdate(update, actions) {
+export async function handleControlUpdate(update, actions, botInfo = {}) {
   // Кнопки
   if (update.callback_query) {
     const cb = update.callback_query;
@@ -141,9 +143,20 @@ export async function handleControlUpdate(update, actions) {
     return;
   }
 
-  // Сообщения — только от владельца
   const msg = update.message;
-  if (!msg || String(msg.from?.id) !== OWNER_CHAT_ID()) return;
+  if (!msg) return;
+
+  // Группы и обсуждения каналов → публичные поверхности (этап 3)
+  if (['group', 'supergroup'].includes(msg.chat?.type)) {
+    const result = await handleGroupMessage(msg, botInfo);
+    if (result.action !== 'skip') {
+      console.log(`[Community] ${result.action} in chat ${msg.chat.id}`);
+    }
+    return;
+  }
+
+  // Личка control-бота — только владелец
+  if (String(msg.from?.id) !== OWNER_CHAT_ID()) return;
   const text = msg.text || '';
 
   // Команды
@@ -183,7 +196,13 @@ export function startControlLoop(actions) {
   let offset = 0;
 
   (async () => {
-    console.log('[Control] Long-polling управления запущен (команды и кнопки владельца)');
+    // username/id бота — для триггеров упоминаний в группах
+    const me = await getControlBotInfo();
+    const botInfo = me.ok
+      ? { botUsername: me.result?.username, botId: me.result?.id }
+      : {};
+    console.log(`[Control] Long-polling запущен (команды, кнопки, группы)${botInfo.botUsername ? ` как @${botInfo.botUsername}` : ''}`);
+
     while (running) {
       const result = await getControlUpdates(offset);
       if (!running) break;
@@ -195,7 +214,7 @@ export function startControlLoop(actions) {
       for (const update of result.result || []) {
         offset = update.update_id + 1;
         try {
-          await handleControlUpdate(update, actions);
+          await handleControlUpdate(update, actions, botInfo);
         } catch (err) {
           console.error('[Control] Error handling update:', err);
         }
