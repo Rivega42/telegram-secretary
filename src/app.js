@@ -44,6 +44,7 @@ import { truncate, usernameDisplay } from './core/format.js';
 import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
 import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
+import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import {
   setExecuteCallback,
   createPending,
@@ -420,6 +421,19 @@ export function createApp() {
     }
 
     const envelope = telegramBusiness.toEnvelope(msg);
+
+    // Голосовое + настроенный STT → транскрибируем и обрабатываем как текст
+    if (!envelope.text && (msg.voice || msg.audio || msg.video_note) && isSttConfigured()) {
+      const stt = await transcribeVoice(msg);
+      if (stt.ok) {
+        envelope.text = stt.text;
+        envelope.attachments.push({ type: 'voice_transcribed' });
+        console.log(`[STT] Голосовое транскрибировано: ${truncate(stt.text, 60)}`);
+      } else {
+        console.warn(`[STT] Транскрипция не удалась (${stt.error}) — эскалация владельцу`);
+      }
+    }
+
     console.log(`Business message from ${sender.id} (@${sender.username}): ${envelope.text.slice(0, 50) || '[non-text]'}...`);
 
     // Контакты (исторический стейт) + персона (identity-слой)

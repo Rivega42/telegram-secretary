@@ -163,6 +163,11 @@ test('невалидная политика отклоняется', async () =>
   assert.equal(r.status, 400);
 });
 
+test('STT: без STT_BASE_URL голосовое идёт по пути эскалации (isSttConfigured=false)', async () => {
+  const { isSttConfigured } = await import('../src/connectors/telegram/stt.js');
+  assert.equal(isSttConfigured(), false);
+});
+
 test('не-текстовое сообщение: эскалация вместо автоответа', async () => {
   const before = (await api('/api/pending')).body.count;
   const { body } = await postWebhook(businessMessage(99, null, { voice: { file_id: 'v1' } }));
