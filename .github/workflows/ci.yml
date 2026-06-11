@@ -21,7 +21,10 @@ jobs:
 
       - name: Проверка синтаксиса
         run: |
-          for f in src/*.js; do node --check "$f"; done
+          for f in $(find src -name '*.js'); do node --check "$f"; done
+
+      - name: Тесты
+        run: npm test
 
       - name: Smoke-тест (DRY_RUN)
         env:
@@ -52,3 +55,27 @@ jobs:
           curl -sf -H 'X-Api-Key: ci-test-key' http://127.0.0.1:18792/api/pending | grep -q '"count":1'
 
           kill $SRV
+
+  docker:
+    name: Docker-образ собирается и проходит smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка образа
+        run: docker build -t telegram-secretary:ci .
+
+      - name: Smoke-тест контейнера
+        run: |
+          docker run -d --name sec-ci \
+            -e DRY_RUN=true -e DRY_RUN_BRAIN=true \
+            -e OWNER_CHAT_ID=1 -e API_KEY=ci-key \
+            -e BUSINESS_BOT_TOKEN=dummy -e ONEINT_BOT_TOKEN=dummy \
+            -p 18792:18792 telegram-secretary:ci
+          sleep 5
+          curl -sf http://127.0.0.1:18792/health | grep -q '"status":"ok"'
+          curl -sf -X POST http://127.0.0.1:18792/tg/business-webhook \
+            -H 'Content-Type: application/json' \
+            -d '{"update_id":1,"business_message":{"business_connection_id":"c1","chat":{"id":42},"from":{"id":777,"username":"t","first_name":"Тест"},"text":"привет"}}' \
+            | grep -q '"pending":true'
+          docker rm -f sec-ci

@@ -1,0 +1,26 @@
+{
+  "_comment": "Пример реестра инстансов. Скопируй в STATE_DIR/instances.json (или укажи путь в INSTANCES_FILE). Секреты — только через ${ENV_VAR}. Если файла нет — используется один инстанс из env (LITELLM_* или GW_*).",
+  "instances": {
+    "main": {
+      "driver": "openclaw",
+      "base_url": "http://127.0.0.1:18789",
+      "api_key": "${GW_API_KEY}",
+      "model": "openclaw",
+      "stateful": true,
+      "send_system": true,
+      "session_header": "x-openclaw-session-id",
+      "session_prefix": "secretary"
+    },
+    "cheap": {
+      "driver": "stateless-llm",
+      "base_url": "${LITELLM_BASE_URL}",
+      "api_key": "${LITELLM_API_KEY}",
+      "model": "openai/gpt-4o-mini"
+    }
+  },
+  "routing": {
+    "telegram:dm": "main",
+    "comments": "cheap",
+    "default": "main"
+  }
+}

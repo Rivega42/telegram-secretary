@@ -15,7 +15,7 @@ cp .env.example .env   # для локальной разработки дост
 Локальный запуск без реальных токенов и LLM:
 
 ```bash
-DRY_RUN=true DRY_RUN_VIKA=true OWNER_CHAT_ID=1 npm start
+DRY_RUN=true DRY_RUN_BRAIN=true OWNER_CHAT_ID=1 npm start
 curl http://127.0.0.1:18792/health
 ```
 
@@ -53,20 +53,26 @@ CI проверяет это автоматически: PR, меняющий `s
 ## Проверки перед PR
 
 ```bash
-# Синтаксис
-for f in src/*.js; do node --check "$f"; done
+# Тесты (обязательно — гоняются и в CI)
+npm test
 
 # Smoke-тест (сервер должен подняться и ответить на /health)
-DRY_RUN=true DRY_RUN_VIKA=true OWNER_CHAT_ID=1 npm start
+DRY_RUN=true DRY_RUN_BRAIN=true OWNER_CHAT_ID=1 npm start
+
+# Docker-образ собирается (проверяется и в CI)
+docker build -t telegram-secretary:dev .
 ```
 
 ## Принципы кода
 
 - Node.js ≥ 18, ESM (`type: module`), без TypeScript (пока)
-- Минимум зависимостей — сейчас их две (`express`, `dotenv`), каждая новая обсуждается в issue
-- Любая отправка наружу должна уважать `DRY_RUN` / `DRY_RUN_VIKA`
+- Минимум зависимостей — сейчас их две (`express`, `dotenv`), тесты на встроенном `node:test`;
+  каждая новая зависимость обсуждается в issue
+- Любая отправка наружу должна уважать `DRY_RUN` / `DRY_RUN_BRAIN`
 - Секреты — только через env, никогда в коде и конфигах репозитория
-- Платформо-специфичный код не должен протекать в ядро (см. целевую архитектуру)
+- Платформо-специфичный код живёт в `src/connectors/**` и не протекает в ядро
+  (`src/core/`, `src/brains/` видят только конверт)
+- Персона (имена, стиль) — только в `persona/`, не в коде
 
 ## Безопасность
 

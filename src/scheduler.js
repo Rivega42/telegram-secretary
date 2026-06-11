@@ -55,7 +55,11 @@ function savePendingToFile() {
       senderInfo: task.senderInfo,
       originalText: task.originalText,
       scheduledAt: task.scheduledAt,
-      delayMs: task.delayMs
+      delayMs: task.delayMs,
+      // новые поля (этап 1): конверт и персона; старые pending.json без них
+      // корректно обрабатываются при выполнении (см. app.js)
+      envelope: task.envelope,
+      personId: task.personId
     };
   }
   try {
@@ -94,6 +98,8 @@ export function loadPendingFromFile() {
         const timeoutHandle = setTimeout(() => {
           executePending(chatId);
         }, remainingMs);
+        // Таймер не должен держать процесс живым сам по себе (его держит HTTP-сервер)
+        timeoutHandle.unref();
         
         pendingTasks.set(chatId, {
           ...task,
@@ -110,25 +116,28 @@ export function loadPendingFromFile() {
 }
 
 /**
- * Создать pending task
+ * Создать pending task.
+ * extra: { envelope, personId } — конверт сообщения и ID персоны (этап 1)
  */
-export function createPending(mapping, senderInfo, originalText) {
+export function createPending(mapping, senderInfo, originalText, extra = {}) {
   const chatId = String(mapping.business_chat_id);
-  
+
   // Если уже есть pending для этого чата — отменить старый
   if (pendingTasks.has(chatId)) {
     console.log(`[Scheduler] Replacing existing pending for chat ${chatId}`);
     cancelPending(chatId, 'replaced by new message');
   }
-  
+
   const delayMinutes = getDelayMinutes();
   const delayMs = delayMinutes * 60 * 1000;
   const scheduledAt = new Date().toISOString();
-  
+
   const timeoutHandle = setTimeout(() => {
     executePending(chatId);
   }, delayMs);
-  
+  // Таймер не должен держать процесс живым сам по себе (его держит HTTP-сервер)
+  timeoutHandle.unref();
+
   const task = {
     mappingId: mapping.mappingId,
     businessConnectionId: mapping.business_connection_id,
@@ -137,6 +146,8 @@ export function createPending(mapping, senderInfo, originalText) {
     originalText,
     scheduledAt,
     delayMs,
+    envelope: extra.envelope,
+    personId: extra.personId,
     timeoutHandle
   };
   

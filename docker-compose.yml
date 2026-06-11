@@ -1,17 +1,41 @@
+# docker-compose — telegram-secretary
+#
+# Только прокси (LLM указан в .env через LITELLM_*/GW_*):
+#   docker compose up -d
+#
+# Прокси + локальный OpenClaw Gateway (единая память):
+#   docker compose --profile gateway up -d
+#   В .env при этом: GW_BASE_URL=http://openclaw-gateway:18789
+
 services:
   secretary:
-    image: node:22-slim
+    build: .
     container_name: telegram-secretary
+    env_file:
+      - path: .env
+        required: false   # без .env сервер упадёт с понятным списком незаполненных переменных
+    environment:
+      - STATE_DIR=/data
     ports:
-      - "18789:18789"
+      - "${PORT:-18792}:18792"
+    volumes:
+      - secretary-state:/data
+    restart: unless-stopped
+    networks:
+      - secretary-net
+
+  # Опционально: OpenClaw-инстанс рядом (профиль gateway).
+  # Workspace гейтвея — это и есть единая память секретаря.
+  openclaw-gateway:
+    image: node:22-slim
+    container_name: openclaw-gateway
+    profiles: ["gateway"]
     volumes:
       - ./workspace:/workspace
-      - ./openclaw.json:/workspace/.openclaw/openclaw.json
-      - secretary-data:/root/.openclaw
+      - openclaw-data:/root/.openclaw
     environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     command: >
       sh -c "npm install -g openclaw@latest &&
              OPENCLAW_HOME=/workspace openclaw gateway run --port 18789"
@@ -20,7 +44,8 @@ services:
       - secretary-net
 
 volumes:
-  secretary-data:
+  secretary-state:
+  openclaw-data:
 
 networks:
   secretary-net:

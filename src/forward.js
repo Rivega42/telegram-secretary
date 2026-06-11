@@ -94,6 +94,26 @@ export async function checkBotToken(token) {
 }
 
 /**
+ * Произвольное уведомление владельцу (control plane).
+ * Уважает DRY_RUN через telegramApi.
+ */
+export async function notifyOwnerText(text) {
+  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
+  const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
+
+  if (!ONEINT_TOKEN) {
+    console.error('ONEINT_BOT_TOKEN not set');
+    return { ok: false, error: 'Token not configured' };
+  }
+
+  return telegramApi(ONEINT_TOKEN, 'sendMessage', {
+    chat_id: OWNER_CHAT_ID,
+    text,
+    parse_mode: undefined
+  });
+}
+
+/**
  * Отправить копию ответа Вики Роману
  * Формат: что получили, что ответили, mapping_id
  */

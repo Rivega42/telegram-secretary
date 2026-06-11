@@ -5,6 +5,41 @@
 
 ## [Unreleased]
 
+### Добавлено (этап 1 — ядро «коннекторы ↔ мозг»)
+- **Ядро `src/core/`**: платформо-нейтральный конверт сообщения (`envelope.js`, c `capabilities`),
+  Brain-интерфейс (`brain.js`), персона из конфига (`persona.js`), identity-слой персон
+  (`identity.js`), реестр LLM-инстансов с маршрутизацией (`instances.js`)
+- **Драйверы мозга `src/brains/`**: `stateless-llm` (любой OpenAI-совместимый endpoint,
+  режим «из коробки») и `openclaw` (сессии инстанса per-человек, единая память в workspace;
+  `user`-поле + конфигурируемый session-заголовок, `stateful`/`send_system`)
+- **Коннектор `src/connectors/telegram/business.js`** — telegram-поля больше не протекают в ядро
+- **Персона в конфиге** `persona/` (`persona.json`, `base.md`, `dm.md`, `public.md`):
+  имена и стиль не зашиты в код; раскрытие ИИ-природы — опция per-surface
+  (в публичных поверхностях по умолчанию включено)
+- **Персоны и политики**: `persons.json` (память по людям, а не по платформенным ID),
+  политики `auto`/`escalate`/`ignore`; семья/VIP получают эскалацию владельцу в обход LLM;
+  слияние персон между платформами — только явное (`POST /api/persons/:id/merge`)
+- **Не-текстовые сообщения** (голос, фото, стикеры) больше не отвечаются невпопад —
+  эскалируются владельцу с типом вложения
+- **Реестр инстансов** `instances.json` (см. `instances.example.json`): несколько
+  OpenClaw/LLM-инстансов, маршрутизация «поверхность → инстанс», секреты через `${ENV_VAR}`
+- **Docker**: `Dockerfile` (non-root, healthcheck, стейт в volume `/data`) и обновлённый
+  `docker-compose.yml` (сервис прокси + опциональный OpenClaw Gateway через профиль `gateway`)
+- **Тесты**: 29 тестов на встроенном `node:test` (`npm test`) — конверт, персона, identity,
+  инстансы, e2e webhook-потока; прогоняются в CI вместе со сборкой Docker-образа
+- **Валидация env при старте** — сервер падает с понятным сообщением вместо молчаливого
+  старта без токенов (кроме DRY_RUN)
+- Новые API: `GET /api/persons`, `POST /api/persons/:id/policy`, `POST /api/persons/:id/merge`
+- Новые env: `BRAIN_DRIVER`, `PERSONA_DIR`, `INSTANCES_FILE`, `HISTORY_CONTEXT_LIMIT`,
+  `DRY_RUN_BRAIN` (алиас исторического `DRY_RUN_VIKA`)
+
+### Изменено
+- `src/server.js` разделён: логика приложения в `src/app.js` (тестируемо), точка входа —
+  `server.js`; `src/vika.js` удалён (логика → `brains/stateless-llm.js` + персона)
+- Ручной ответ через `POST /api/reply` теперь тоже записывается в историю диалога
+- Уведомления владельцу переведены на общий канал `forward.js` и уважают `DRY_RUN`
+- Pending-таймеры не держат процесс при остановке сервера (`unref`)
+
 ### Добавлено
 - Поддержка любого OpenAI-совместимого endpoint через `LITELLM_BASE_URL` / `LITELLM_API_KEY`
   (раньше переменные были задокументированы, но код их не читал)

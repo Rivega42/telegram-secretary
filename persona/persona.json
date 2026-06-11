@@ -1,0 +1,17 @@
+{
+  "secretary_name": "Вика",
+  "owner": {
+    "name": "Роман",
+    "username": "Rivega42",
+    "info": "разработчик из СПб, делает GrandHub (AI-помощник для бизнеса, grandhub.ru)"
+  },
+  "language": "ru",
+  "disclosure": {
+    "dm": false,
+    "comments": true,
+    "channel_post": true,
+    "group": true
+  },
+  "fallback_reply": "Добрый день! {{owner_name}} скоро ответит вам лично.",
+  "dry_run_reply": "Добрый день! Я {{secretary_name}}, помощница. {{owner_name}} скоро ответит."
+}

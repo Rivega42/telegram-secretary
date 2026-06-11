@@ -1,15 +1,46 @@
-# Развёртывание GH-Secretary
+# Развёртывание telegram-secretary
 
 ## Требования
 
-- Node.js ≥ 18
-- PM2 (или systemd)
+- Docker (рекомендуется) **или** Node.js ≥ 18 + PM2
 - Nginx с публичным HTTPS-доменом для webhook
 - Два Telegram бота:
-  - **VikaSecretary_bot** — с включённым Business Mode (через @BotFather → Bot Settings → Business Mode)
-  - **OneInt_bot** — обычный бот для уведомлений владельцу
+  - **Business-бот** — с включённым Business Mode (через @BotFather → Bot Settings → Business Mode)
+  - **Бот уведомлений** — обычный бот для control plane владельца
 
-## Шаги
+## Вариант А: Docker (рекомендуется)
+
+```bash
+git clone https://github.com/Rivega42/telegram-secretary.git /opt/telegram-secretary
+cd /opt/telegram-secretary
+cp .env.example .env && chmod 600 .env
+nano .env                      # заполнить (см. шаг «Конфигурация» ниже)
+
+docker compose up -d           # только прокси
+# или вместе с локальным OpenClaw Gateway (единая память):
+docker compose --profile gateway up -d
+
+docker compose logs -f secretary
+curl http://127.0.0.1:18792/health
+```
+
+Стейт живёт в named volume `secretary-state` (внутри контейнера `/data`) и переживает
+пересоздание контейнера. Бэкап: `docker run --rm -v secretary-state:/data -v $(pwd):/backup
+alpine tar czf /backup/secretary-state.tar.gz /data`.
+
+Обновление:
+
+```bash
+cd /opt/telegram-secretary
+git pull
+docker compose up -d --build
+```
+
+Дальше — шаги 4–6 (Nginx, регистрация webhook, подключение Business).
+
+## Вариант Б: PM2
+
+### Шаги
 
 ### 1. Подготовка сервера
 
