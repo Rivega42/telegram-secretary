@@ -40,6 +40,7 @@ import { respond as brainRespond } from './core/brain.js';
 import { loadPersona } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
 import { createEnvelope } from './core/envelope.js';
+import { truncate, usernameDisplay } from './core/format.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import {
   setExecuteCallback,
@@ -122,13 +123,10 @@ export async function executeBrainResponse(task) {
     logOutgoing(task.mappingId, brainResult.text, replyResult.ok);
 
     // Копия владельцу
-    const usernameDisplay = envelope.identity.username
-      ? `@${envelope.identity.username}`
-      : '(no username)';
     await notifyOwnerText(
-      `💼 [${persona.secretary_name} → ${usernameDisplay}]\n(⏱ отложенный ответ)\n` +
-      `Получено: «${task.originalText.slice(0, 200)}${task.originalText.length > 200 ? '...' : ''}»\n` +
-      `Ответила: «${brainResult.text.slice(0, 300)}${brainResult.text.length > 300 ? '...' : ''}»` +
+      `💼 [${persona.secretary_name} → ${usernameDisplay(envelope.identity)}]\n(⏱ отложенный ответ)\n` +
+      `Получено: «${truncate(task.originalText, 200)}»\n` +
+      `Ответила: «${truncate(brainResult.text, 300)}»` +
       (replyResult.ok ? '' : '\n⚠️ ОТПРАВКА НЕ УДАЛАСЬ')
     );
   } catch (err) {
@@ -137,6 +135,10 @@ export async function executeBrainResponse(task) {
 }
 
 export function createApp() {
+  // Scheduler исполняет отложенные ответы через Brain. Регистрация здесь,
+  // а не на уровне модуля — чтобы импорт app.js не имел сайд-эффектов.
+  setExecuteCallback(executeBrainResponse);
+
   const app = express();
 
   app.use(express.json());
@@ -276,7 +278,7 @@ export function createApp() {
       sender_username: sender.username,
       sender_name: envelope.identity.display_name
     };
-    const usernameDisplay = senderInfo.sender_username ? `@${senderInfo.sender_username}` : '(no username)';
+    const senderDisplay = usernameDisplay(envelope.identity);
 
     // Политика ignore: не отвечаем и не уведомляем
     if (person.policy === 'ignore') {
@@ -293,8 +295,8 @@ export function createApp() {
     if (person.policy === 'escalate') {
       console.log(`[Policy] escalate: person ${person.id} → owner`);
       const notify = await notifyOwnerText(
-        `🔴 [Эскалация → ${mapping.mappingId}] ${usernameDisplay} (${senderInfo.sender_name}):\n` +
-        `«${historyText.slice(0, 300)}»\n\nАвтоответ отключён политикой контакта — ответь сам.`
+        `🔴 [Эскалация → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}):\n` +
+        `«${truncate(historyText, 300)}»\n\nАвтоответ отключён политикой контакта — ответь сам.`
       );
       return res.json({
         ok: true, type: 'business_message', person_id: person.id,
@@ -306,7 +308,7 @@ export function createApp() {
     if (!envelope.text) {
       console.log(`[Policy] non-text message from ${person.id} → escalate to owner`);
       const notify = await notifyOwnerText(
-        `📎 [Не-текст → ${mapping.mappingId}] ${usernameDisplay} (${senderInfo.sender_name}): ${historyText}\n\n` +
+        `📎 [Не-текст → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}): ${historyText}\n\n` +
         `Автоответ на вложения не поддерживается — ответь сам.`
       );
       return res.json({
@@ -323,8 +325,8 @@ export function createApp() {
     });
 
     const notifyResult = await notifyOwnerText(
-      `📨 [Pending → ${mapping.mappingId}] ${usernameDisplay} (${senderInfo.sender_name}):\n` +
-      `«${envelope.text.slice(0, 300)}${envelope.text.length > 300 ? '...' : ''}»\n\n` +
+      `📨 [Pending → ${mapping.mappingId}] ${senderDisplay} (${senderInfo.sender_name}):\n` +
+      `«${truncate(envelope.text, 300)}»\n\n` +
       `⏱ Отвечу через ${delayMinutes} мин если ты не ответишь сам`
     );
 
@@ -448,6 +450,3 @@ export function createApp() {
 
   return app;
 }
-
-// Scheduler исполняет ответы через Brain
-setExecuteCallback(executeBrainResponse);

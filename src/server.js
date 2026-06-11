@@ -32,9 +32,7 @@ function validateEnv() {
   }
 
   if (problems.length) {
-    if (dryRun && (dryRunBrain || hasLlm)) {
-      console.warn('⚠️  Не заполнено (ок для DRY_RUN):\n   - ' + problems.join('\n   - '));
-    } else if (dryRun) {
+    if (dryRun) {
       console.warn('⚠️  Не заполнено (ок для DRY_RUN):\n   - ' + problems.join('\n   - '));
     } else {
       console.error('❌ Не заполнены обязательные переменные окружения:\n   - ' + problems.join('\n   - '));

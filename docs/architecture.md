@@ -1,91 +1,139 @@
 # Архитектура telegram-secretary
 
 Секретарь-прокси между владельцем и его контактами в Telegram, построенный по схеме
-«коннекторы поверхностей ↔ мозг» (см. `openclaw-integration.md` — целевая картина).
+«коннекторы поверхностей ↔ мозг» (целевая картина — `openclaw-integration.md`,
+управление в работе — `operations.md`).
 
 ## Зачем
 
 Когда владелец занят / спит / в отпуске — секретарь:
-- Принимает входящие от любых контактов через Telegram Business
-- Отвечает в стиле владельца (персона настраивается в `persona/`)
-- Эскалирует важное: контакты с политикой `escalate` (семья, VIP) и не-текстовые
-  сообщения уходят владельцу без автоответа
-- Если владелец ответил сам — отложенный автоответ отменяется, а его реплика
-  сохраняется в историю (секретарь не противоречит сказанному)
+- принимает входящие от любых контактов через Telegram Business;
+- отвечает в стиле владельца (персона настраивается в `persona/`);
+- эскалирует важное: контакты с политикой `escalate` (семья, VIP) и не-текстовые
+  сообщения уходят владельцу без автоответа;
+- если владелец ответил сам — автоответ отменяется, а его реплика сохраняется
+  в историю (секретарь не противоречит сказанному).
 
-## Компоненты
+## Карта компонентов: кто с кем работает
 
+```mermaid
+flowchart TB
+    CLIENT(["Контакт в Telegram"]) -->|пишет владельцу| TGAPI["Telegram Business API"]
+    OWNER(["Владелец"]) -.->|отвечает сам| TGAPI
+    TGAPI -->|"webhook (update)"| APP
+
+    subgraph PROXY["secretary-proxy (Express)"]
+        APP["app.js<br>webhook + админ-API"]
+        CONN["connectors/telegram/business.js<br>telegram-поля ↔ конверт"]
+        SCHED["scheduler.js<br>задержка 2/3 мин, отмена"]
+
+        subgraph CORE["ядро src/core/ — платформо-нейтральное"]
+            ENV["envelope.js<br>конверт + capabilities"]
+            IDENT["identity.js<br>персоны и политики"]
+            PERS["persona.js<br>характер из persona/"]
+            BRAIN["brain.js<br>интерфейс мозга"]
+            INST["instances.js<br>реестр + маршрутизация"]
+            PROMPT["prompt.js<br>общий промпт-билдер"]
+        end
+
+        subgraph BRAINS["драйверы src/brains/"]
+            SLLM["stateless-llm<br>локальная история"]
+            OCLAW["openclaw<br>сессии per-человек"]
+        end
+
+        FWD["forward.js<br>отправка, DRY_RUN"]
+        STATE[("state.js + STATE_DIR<br>история, маппинги,<br>persons, pending")]
+    end
+
+    APP --> CONN --> ENV
+    APP --> IDENT
+    APP --> SCHED --> BRAIN
+    BRAIN --> INST
+    BRAIN --> SLLM & OCLAW
+    SLLM & OCLAW --> PROMPT & PERS
+    SLLM -->|"chat/completions"| LLM["LiteLLM / OpenRouter /<br>любой OpenAI-совместимый"]
+    OCLAW -->|"сессия + user"| OC["OpenClaw-инстанс"]
+    OC --- WS[("workspace<br>единая память")]
+    APP --> FWD
+    SCHED --> FWD
+    FWD -->|"ответ от имени владельца"| TGAPI
+    FWD -->|"уведомления, копии,<br>эскалации"| NOTIFY["Бот уведомлений<br>(личка владельца)"]
+    APP <--> STATE
 ```
-Контакт в TG ──► Business-бот ──► webhook ──► connectors/telegram/business.js
-                                                      │ envelope
-                                                      ▼
-                                   ┌─ identity (персона человека, политика)
-                                   ├─ scheduler (задержка 2/3 мин, отмена)
-                                   ▼
-                                core/brain ──► brains/stateless-llm ──► LiteLLM/OpenRouter/…
-                                   │      └──► brains/openclaw ───────► OpenClaw-инстанс
-                                   ▼                                    (единая память)
-                          Business API (ответ от имени владельца)
-                                   │
-        бот уведомлений ◄──────────┘ (копии, эскалации, pending-уведомления)
+
+Ключевое правило слоёв: **telegram-специфичные поля не выходят за пределы
+`connectors/`** — ядро и драйверы видят только конверт (`envelope`).
+
+## Поток входящего сообщения
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Клиент
+    participant TG as Telegram
+    participant A as app.js
+    participant I as identity
+    participant S as scheduler
+    participant B as brain
+    participant O as Владелец
+
+    C->>TG: сообщение в личку владельца
+    TG->>A: webhook business_message
+    A->>A: дедупликация update_id
+    A->>I: resolvePerson(telegram, user_id)
+    alt политика ignore
+        A-->>TG: 200 (тишина)
+    else политика escalate / не-текст
+        A->>O: 🔴 эскалация (без LLM)
+    else политика auto
+        A->>S: createPending(конверт, persona_id)
+        A->>O: 📨 «отвечу через N мин»
+        Note over S: задержка 2 мин (день) / 3 мин (ночь)
+        opt владелец ответил сам
+            O->>TG: своё сообщение в чат
+            TG->>A: webhook (from = владелец)
+            A->>S: cancelPending ✓
+            A->>A: реплика владельца → история (роль owner)
+        end
+        S->>B: respond(envelope, {persona, person, history})
+        B->>B: маршрутизация → инстанс → драйвер
+        B-->>S: текст (или fallback из персоны)
+        S->>TG: ответ от имени владельца
+        TG->>C: сообщение «от владельца»
+        S->>A: история ← ответ (только если отправка ok)
+        S->>O: 💼 копия ответа
+    end
 ```
 
-### Слои
+## Данные: кто что хранит
 
-| Слой | Файлы | Ответственность |
+```mermaid
+flowchart LR
+    subgraph STATE_DIR["STATE_DIR (в Docker — volume /data)"]
+        P1["persons.json<br>люди, identities, политики"]
+        P2["conversations/&lt;id&gt;.jsonl<br>история: client/vika/owner,<br>хронологически"]
+        P3["pending.json<br>очередь + конверт"]
+        P4["contacts.json, connections.json<br>telegram-стейт"]
+        P5["instances.json (опц.)<br>реестр мозгов"]
+        P6["log-YYYY-MM-DD.jsonl<br>все события"]
+    end
+    subgraph PERSONA_DIR["PERSONA_DIR"]
+        Q1["persona.json + base.md<br>+ dm.md + public.md"]
+    end
+```
+
+| Файл | Содержание | Кто пишет |
 |---|---|---|
-| Точка входа | `src/server.js` | Валидация env, запуск, восстановление pending |
-| Приложение | `src/app.js` | Webhook, политики, админ-API |
-| Коннектор | `src/connectors/telegram/business.js` | telegram-поля ↔ конверт; ядро telegram не видит |
-| Ядро | `src/core/*` | envelope, brain, persona, identity, instances |
-| Мозги | `src/brains/*` | stateless-llm, openclaw (+ общий llm-http) |
-| Отправка | `src/forward.js` | Telegram API, уважает DRY_RUN |
-| Очередь | `src/scheduler.js` | Отложенные ответы, persistence |
+| `persons.json` | Персоны: identities per-платформа, политики `auto/escalate/ignore` | `core/identity.js` |
+| `conversations/<mapping>.jsonl` | История диалога, **хронологически**, роли `client`/`vika`/`owner` | `state.js` |
+| `pending.json` | Отложенные ответы (+конверт, +person_id); переживает рестарт | `scheduler.js` |
+| `contacts.json`, `connections.json` | Telegram-метаданные (статистика контактов, подключения) | `state.js` |
+| `instances.json` | Реестр мозгов и маршрутизация; секреты через `${ENV}` | владелец (вручную) |
+| `log-*.jsonl` | Полный журнал событий | `state.js` |
 
-### Зачем два бота
-
-| Бот | Роль | Режим |
-|---|---|---|
-| Business-бот | Принимает входящие, отвечает «от владельца» | Business Mode (webhook) |
-| Бот уведомлений | Личка владельца: pending-уведомления, копии, эскалации | sendMessage |
-
-## Поток сообщения
-
-1. Контакт пишет владельцу → Telegram доставляет `business_message` на webhook
-2. Дедупликация по `update_id` (при ошибке обработки пометка снимается — ретрай Telegram не теряется)
-3. Если автор — владелец: реплика → история (роль `owner`), pending отменяется
-4. Иначе коннектор собирает **конверт**, identity-слой резолвит **персону**:
-   - политика `ignore` → ничего
-   - политика `escalate` → история + уведомление владельцу, без LLM
-   - не-текст (голос/фото/…) → история (маркер вложения) + эскалация владельцу
-   - политика `auto` → история + pending с задержкой **2 мин (08–18 МСК) / 3 мин (18–08 МСК)**
-5. По таймеру: `core/brain` выбирает инстанс по маршрутизации и драйвер
-   (`stateless-llm` | `openclaw`), генерирует ответ
-6. Ответ уходит через Business API; **в историю пишется только успешно отправленное**;
-   владелец получает копию
-
-## Стейт (persistence)
-
-`STATE_DIR` (по умолчанию `./state`, в Docker — volume `/data`):
-
-| Файл | Содержание |
-|---|---|
-| `connections.json` | Активные business_connection_id |
-| `contacts.json` | Контакты Telegram (исторический стейт) |
-| `persons.json` | **Персоны**: память по людям, identities per-платформа, политики |
-| `conversations.json` | Маппинг mapping_id ↔ business-чат |
-| `conversations/<mapping_id>.jsonl` | История диалога (роли `client`/`vika`/`owner`, хронологически) |
-| `pending.json` | Очередь отложенных ответов (+конверт, +person_id) |
-| `instances.json` | Реестр инстансов и маршрутизация (опционально, см. `instances.example.json`) |
-| `log-YYYY-MM-DD.jsonl` | Все события за день |
-
-При рестарте pending восстанавливаются из `pending.json` — отложенные ответы не теряются.
-
-## Конфиг персоны
-
-`PERSONA_DIR` (по умолчанию `./persona`): `persona.json` + `base.md` + `dm.md` + `public.md`.
-Если каталога нет — нейтральная generic-персона без имён. Раскрытие ИИ-природы —
-флаг `disclosure` per-поверхность (публичные — по умолчанию раскрывают).
+`contacts.json` и `persons.json` — намеренно разные сторы: contacts — сырые
+telegram-метаданные (статистика), persons — платформо-независимая идентичность
+и политики. Слияние персон между платформами — **только явное** (`/api/persons/:id/merge`).
 
 ## Эндпоинты
 
@@ -104,9 +152,20 @@
 
 Все пути `/api/*` требуют заголовок `X-Api-Key` (env `API_KEY`).
 
+## Известные ограничения (осознанные, MVP)
+
+- Файловый стейт с синхронным I/O: `persons.json` перечитывается на каждое сообщение,
+  история читается целиком — до ~50 активных диалогов в день это незаметно;
+  дальше — SQLite (роадмап, этап 5, issue #26).
+- Очередь pending ключуется telegram-`chat_id`; при добавлении второй платформы
+  будет переведена на `envelope.thread_key` (этап 4).
+- Кэш `persona`/`instances` живёт до рестарта — правки конфигов требуют перезапуска.
+- При падении процесса в момент генерации ответа задача уже снята с очереди —
+  ответ не ретраится (владелец видит отсутствие копии).
+
 ## Дополнительно
 
-См. также:
+- `operations.md` — управление: режимы, политики, мониторинг, бэкап
 - `openclaw-integration.md` — целевая архитектура: единая память, мультиплатформенность
 - `vika-style.md` — стиль общения секретаря
 - `secretary-proxy-rules.md` — правила «секретарь-прокси»

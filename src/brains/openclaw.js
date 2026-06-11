@@ -22,7 +22,7 @@
 
 import { chatCompletions } from './llm-http.js';
 import { buildSystemPrompt } from '../core/persona.js';
-import { buildUserPrompt } from './stateless-llm.js';
+import { buildUserPrompt } from '../core/prompt.js';
 
 export async function respond(envelope, ctx, instance) {
   const { persona, person, history = [], isFirstTime = true } = ctx;

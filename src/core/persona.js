@@ -23,6 +23,13 @@ const GENERIC_PERSONA = {
   owner: { name: 'Владелец', username: '', info: '' },
   language: 'ru',
   disclosure: { dm: true, comments: true, channel_post: true, group: true },
+  // Тексты disclosure-блока можно переопределить в persona.json (поле disclosure_text)
+  disclosure_text: {
+    on: 'РАСКРЫТИЕ: ты — ИИ-ассистент. Не выдавай себя за человека; ' +
+        'если собеседник спрашивает, человек ли ты, честно скажи, что ты ИИ-помощник владельца.',
+    off: 'РАСКРЫТИЕ: владелец настроил тебя отвечать от имени живого секретаря. ' +
+         'Не сообщай по своей инициативе, что ты ИИ.'
+  },
   fallback_reply: 'Добрый день! Владелец получил ваше сообщение и ответит позже.',
   dry_run_reply: 'Добрый день! Я ассистент, владелец скоро ответит.'
 };
@@ -61,7 +68,8 @@ export function loadPersona({ force = false } = {}) {
         ...GENERIC_PERSONA,
         ...parsed,
         owner: { ...GENERIC_PERSONA.owner, ...(parsed.owner || {}) },
-        disclosure: { ...GENERIC_PERSONA.disclosure, ...(parsed.disclosure || {}) }
+        disclosure: { ...GENERIC_PERSONA.disclosure, ...(parsed.disclosure || {}) },
+        disclosure_text: { ...GENERIC_PERSONA.disclosure_text, ...(parsed.disclosure_text || {}) }
       };
     } catch (err) {
       console.error('[Persona] Invalid persona.json, using generic persona:', err.message);
@@ -106,17 +114,10 @@ export function buildSystemPrompt(persona, surface = 'dm') {
   if (surfaceMd) parts.push(renderTemplate(surfaceMd, persona.vars));
 
   const disclose = persona.disclosure[surface] !== false;
-  if (disclose) {
-    parts.push(
-      'РАСКРЫТИЕ: ты — ИИ-ассистент. Не выдавай себя за человека; ' +
-      'если собеседник спрашивает, человек ли ты, честно скажи, что ты ИИ-помощник владельца.'
-    );
-  } else {
-    parts.push(
-      'РАСКРЫТИЕ: владелец настроил тебя отвечать от имени живого секретаря. ' +
-      'Не сообщай по своей инициативе, что ты ИИ.'
-    );
-  }
+  parts.push(renderTemplate(
+    disclose ? persona.disclosure_text.on : persona.disclosure_text.off,
+    persona.vars
+  ));
 
   return parts.join('\n\n');
 }

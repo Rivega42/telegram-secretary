@@ -34,11 +34,20 @@ OpenAI-совместимый API или OpenClaw-инстанс с единой
 Целевая схема — «коннекторы поверхностей ↔ мозг с единой памятью»
 ([docs/openclaw-integration.md](./docs/openclaw-integration.md)). Этап 1 (ядро) реализован:
 
+```mermaid
+flowchart LR
+    DM["Telegram Business<br>(личка) ✅"] --> E
+    CH["Канал / комменты<br>(этап 3)"] --> E
+    VK["ВКонтакте и др.<br>(этап 4)"] --> E
+    E["коннектор →<br>конверт"] --> BR{"Brain<br>+ политики"}
+    BR -->|stateless-llm| LLM["LiteLLM / OpenRouter / …"]
+    BR -->|openclaw| OC["OpenClaw-инстанс"]
+    OC --- MEM[("единая память<br>per-человек")]
+    BR -. эскалации, копии .-> OWN(["владелец"])
 ```
-Telegram Business (личка)  ──┐   коннектор      ┌─ brains/stateless-llm → LiteLLM/OpenRouter/…
-Канал / комменты (этап 3)  ──┼─→ envelope ─→ Brain ─┤
-ВКонтакте и др. (этап 4)   ──┘                  └─ brains/openclaw → OpenClaw (память per-человек)
-```
+
+Подробные схемы (компоненты, sequence-поток, данные): [docs/architecture.md](./docs/architecture.md).
+Управление в работе: [docs/operations.md](./docs/operations.md).
 
 ```
 src/
@@ -149,7 +158,8 @@ curl -X POST -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' \
 
 | Документ | Содержание |
 |---|---|
-| [docs/architecture.md](./docs/architecture.md) | Текущая архитектура, поток сообщения, стейт |
+| [docs/architecture.md](./docs/architecture.md) | Текущая архитектура: компоненты, поток сообщения, стейт (mermaid) |
+| [docs/operations.md](./docs/operations.md) | Управление и эксплуатация: режимы, политики, мониторинг, бэкап |
 | [docs/openclaw-integration.md](./docs/openclaw-integration.md) | Целевая архитектура: единая память, мультиплатформенность |
 | [docs/deployment.md](./docs/deployment.md) | Развёртывание: Docker, PM2, Nginx, webhook |
 | [docs/vika-style.md](./docs/vika-style.md) | Стиль общения секретаря |

@@ -33,6 +33,19 @@
 - Новые env: `BRAIN_DRIVER`, `PERSONA_DIR`, `INSTANCES_FILE`, `HISTORY_CONTEXT_LIMIT`,
   `DRY_RUN_BRAIN` (алиас исторического `DRY_RUN_VIKA`)
 
+### Изменено (по результатам полномасштабного ревью)
+- Промпт-билдер вынесен из драйвера в ядро (`core/prompt.js`) — драйверы больше
+  не импортируют друг друга
+- Тексты disclosure-блока переопределяемы из `persona.json` (поле `disclosure_text`)
+- `instances.json`: предупреждения при опечатках в routing-ключах и ссылках
+  на несуществующие инстансы (раньше молча уходило в default)
+- Общие форматтеры уведомлений (`core/format.js`), удалён мёртвый код в `forward.js`
+- `notifyOwnerText` проверяет `OWNER_CHAT_ID` перед отправкой
+- Регистрация scheduler-колбэка перенесена внутрь `createApp()` (импорт без сайд-эффектов)
+- Документация переоформлена: mermaid-схемы компонентов/потока/данных в
+  `docs/architecture.md`, новый `docs/operations.md` (управление и эксплуатация),
+  схемы в README и `docs/openclaw-integration.md`, раздел «Известные ограничения»
+
 ### Изменено
 - `src/server.js` разделён: логика приложения в `src/app.js` (тестируемо), точка входа —
   `server.js`; `src/vika.js` удалён (логика → `brains/stateless-llm.js` + персона)

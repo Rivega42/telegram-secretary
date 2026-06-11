@@ -40,35 +40,7 @@ async function telegramApi(token, method, body = {}) {
 }
 
 /**
- * Отправить уведомление Вике о новом бизнес-сообщении
- * Через @OneInt_bot в личку OWNER_CHAT_ID
- */
-export async function notifyOwner(mapping, senderInfo, messageText) {
-  const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
-  const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
-  
-  if (!ONEINT_TOKEN) {
-    console.error('ONEINT_BOT_TOKEN not set');
-    return { ok: false, error: 'Token not configured' };
-  }
-  
-  // Форматируем сообщение для Вики
-  const usernameDisplay = senderInfo.sender_username 
-    ? `@${senderInfo.sender_username}` 
-    : '(no username)';
-  
-  const text = `📨 [Business → ${mapping.mappingId}] ${usernameDisplay} (${senderInfo.sender_name}):\n\n${messageText}\n\n↩️ Ответить: POST /api/reply { "mapping_id": "${mapping.mappingId}", "text": "..." }`;
-  
-  return telegramApi(ONEINT_TOKEN, 'sendMessage', {
-    chat_id: OWNER_CHAT_ID,
-    text: text,
-    parse_mode: undefined // plain text для безопасности
-  });
-}
-
-/**
  * Отправить ответ клиенту через business_connection
- * Через @VikaBusiness_bot
  */
 export async function sendBusinessReply(businessConnectionId, chatId, text) {
   const BUSINESS_TOKEN = process.env.BUSINESS_BOT_TOKEN;
@@ -86,14 +58,6 @@ export async function sendBusinessReply(businessConnectionId, chatId, text) {
 }
 
 /**
- * Проверить токен бота (для healthcheck)
- */
-export async function checkBotToken(token) {
-  if (!token) return { ok: false, error: 'No token' };
-  return telegramApi(token, 'getMe');
-}
-
-/**
  * Произвольное уведомление владельцу (control plane).
  * Уважает DRY_RUN через telegramApi.
  */
@@ -101,9 +65,9 @@ export async function notifyOwnerText(text) {
   const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
   const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
 
-  if (!ONEINT_TOKEN) {
-    console.error('ONEINT_BOT_TOKEN not set');
-    return { ok: false, error: 'Token not configured' };
+  if (!ONEINT_TOKEN || !OWNER_CHAT_ID) {
+    console.error('ONEINT_BOT_TOKEN / OWNER_CHAT_ID not set — owner notification skipped');
+    return { ok: false, error: 'Owner notification not configured' };
   }
 
   return telegramApi(ONEINT_TOKEN, 'sendMessage', {

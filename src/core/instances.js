@@ -22,6 +22,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { SURFACES } from './envelope.js';
 
 const STATE_DIR = process.env.STATE_DIR || './state';
 const INSTANCES_FILE = process.env.INSTANCES_FILE || path.join(STATE_DIR, 'instances.json');
@@ -85,10 +86,27 @@ export function loadInstances({ force = false } = {}) {
     if (!config.routing.default) {
       config.routing.default = Object.keys(config.instances)[0];
     }
+    validateRouting(config);
   }
 
   cache = config;
   return cache;
+}
+
+/**
+ * Опечатки в routing уводят в default молча — предупреждаем при загрузке:
+ * ключ должен быть "default", известной поверхностью или "platform:surface".
+ */
+function validateRouting(config) {
+  for (const [key, name] of Object.entries(config.routing)) {
+    const surface = key.includes(':') ? key.split(':')[1] : key;
+    if (key !== 'default' && !SURFACES.includes(surface)) {
+      console.warn(`[Instances] routing-ключ "${key}" не соответствует ни одной поверхности (${SURFACES.join(', ')}) — он никогда не сработает`);
+    }
+    if (!config.instances[name]) {
+      console.warn(`[Instances] routing "${key}" → "${name}", но такого инстанса нет`);
+    }
+  }
 }
 
 /**
