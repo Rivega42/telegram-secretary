@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+### Изменено (этап 5 — SQLite вместо JSON-файлов, #26)
+- Стейт переведён на **SQLite** (`better-sqlite3`, WAL): `STATE_DIR/secretary.db` —
+  таблицы connections, contacts, conversations, history, persons (+person_identities
+  для O(1)-резолва), pending. Снимает гонки read-modify-write и O(n)-чтения на каждое
+  сообщение
+- **Автоматическая миграция**: существующие JSON-файлы (connections, contacts,
+  conversations + `conversations/*.jsonl`, persons, pending) импортируются при первом
+  старте, исходники переименовываются в `*.migrated` — данные не теряются
+- Публичные API `state.js`/`identity.js`/`scheduler.js` не изменились; история
+  по-прежнему отдаётся хронологически
+- Лёгкие конфиги (mode, drafts, content-plan, instances) остаются файлами —
+  их удобно править руками
+- Бэкап теперь — один файл `secretary.db` (+логи); Dockerfile собирает
+  better-sqlite3 с build-страховкой для musl
+- `better-sqlite3` — первая новая зависимость с обоснованием (issue #26)
+- Тесты: +5 (миграция без потерь: маппинги, хронология истории, персоны/политики,
+  продолжение seq, идемпотентность) — всего 71
+
 ### Добавлено (этап 4 — мультиплатформенность: ВКонтакте)
 - **Коннектор ВКонтакте** (`src/connectors/vk/`): личные сообщения сообществу через
   Callback API (`POST /vk/callback`: confirmation, проверка `VK_SECRET`, дедупликация

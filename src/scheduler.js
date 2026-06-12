@@ -9,11 +9,7 @@
  * - Если владелец ответил сам в этот чат → pending отменяется
  */
 
-import fs from 'fs';
-import path from 'path';
-
-const STATE_DIR = process.env.STATE_DIR || './state';
-const PENDING_FILE = path.join(STATE_DIR, 'pending.json');
+import { getDb } from './core/db.js';
 
 // In-memory Map: businessChatId → pending task
 const pendingTasks = new Map();
@@ -43,44 +39,38 @@ export function getDelayMinutes() {
 }
 
 /**
- * Сохранить pending в файл (persistence)
+ * Сохранить pending в SQLite (persistence; имя сохранено для совместимости API)
  */
 function savePendingToFile() {
-  const data = {};
-  for (const [chatId, task] of pendingTasks.entries()) {
-    data[chatId] = {
-      mappingId: task.mappingId,
-      businessConnectionId: task.businessConnectionId,
-      businessChatId: task.businessChatId,
-      senderInfo: task.senderInfo,
-      originalText: task.originalText,
-      scheduledAt: task.scheduledAt,
-      delayMs: task.delayMs,
-      // новые поля (этапы 1–2): конверт, персона, id уведомления; старые
-      // pending.json без них корректно обрабатываются при выполнении (см. app.js)
-      envelope: task.envelope,
-      personId: task.personId,
-      notifyMessageId: task.notifyMessageId
-    };
-  }
   try {
-    fs.writeFileSync(PENDING_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    const db = getDb();
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM pending').run();
+      const ins = db.prepare('INSERT INTO pending (chat_id, data) VALUES (?, ?)');
+      for (const [chatId, task] of pendingTasks.entries()) {
+        const { timeoutHandle, ...data } = task;
+        ins.run(String(chatId), JSON.stringify(data));
+      }
+    });
+    tx();
   } catch (err) {
-    console.error('[Scheduler] Error saving pending.json:', err.message);
+    console.error('[Scheduler] Error saving pending:', err.message);
   }
 }
 
 /**
- * Загрузить pending из файла и восстановить таймеры
+ * Загрузить pending из SQLite и восстановить таймеры
+ * (старый pending.json импортируется в БД автоматически — см. core/db.js)
  */
 export function loadPendingFromFile() {
   try {
-    if (!fs.existsSync(PENDING_FILE)) {
-      console.log('[Scheduler] No pending.json found, starting fresh');
+    const rows = getDb().prepare('SELECT chat_id, data FROM pending').all();
+    if (!rows.length) {
+      console.log('[Scheduler] No pending tasks, starting fresh');
       return;
     }
-    
-    const data = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf-8'));
+
+    const data = Object.fromEntries(rows.map(r => [r.chat_id, JSON.parse(r.data)]));
     const now = Date.now();
     
     for (const [chatId, task] of Object.entries(data)) {
@@ -110,9 +100,9 @@ export function loadPendingFromFile() {
     }
     
     console.log(`[Scheduler] Loaded ${pendingTasks.size} pending tasks`);
-    
+
   } catch (err) {
-    console.error('[Scheduler] Error loading pending.json:', err.message);
+    console.error('[Scheduler] Error loading pending:', err.message);
   }
 }
 

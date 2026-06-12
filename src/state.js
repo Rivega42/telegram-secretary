@@ -1,20 +1,20 @@
 /**
- * state.js — Управление JSON-состоянием secretary-proxy
- * 
- * Хранит:
- * - connections.json — активные business_connection_id
- * - contacts.json — известные собеседники
- * - conversations.json — маппинг mapping_id ↔ business_chat
- * - log-YYYY-MM-DD.jsonl — лог всех апдейтов
+ * state.js — стейт secretary-proxy поверх SQLite (core/db.js)
+ *
+ * Хранит: connections, contacts, conversations (маппинги), history (диалоги),
+ * через identity.js — persons. Логи событий остаются JSONL (append-only,
+ * с ротацией). Публичный API не менялся при переходе с JSON-файлов (#26);
+ * старые JSON-файлы импортируются автоматически (см. core/db.js).
  */
 
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { getDb } from './core/db.js';
 
 const STATE_DIR = process.env.STATE_DIR || './state';
 
-// Создаём директорию если нет
+// Создаём директорию если нет (для логов)
 if (!fs.existsSync(STATE_DIR)) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
 }
@@ -22,29 +22,6 @@ if (!fs.existsSync(STATE_DIR)) {
 // Кеш для отслеживания дублей по update_id
 const processedUpdates = new Set();
 const MAX_PROCESSED_CACHE = 10000;
-
-/**
- * Загрузить JSON файл
- */
-function loadJson(filename, defaultValue = {}) {
-  const filepath = path.join(STATE_DIR, filename);
-  try {
-    if (fs.existsSync(filepath)) {
-      return JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-    }
-  } catch (err) {
-    console.error(`Error loading ${filename}:`, err.message);
-  }
-  return defaultValue;
-}
-
-/**
- * Сохранить JSON файл
- */
-function saveJson(filename, data) {
-  const filepath = path.join(STATE_DIR, filename);
-  fs.writeFileSync(filepath, JSON.stringify(data, null, 2), 'utf-8');
-}
 
 /**
  * Записать строку в JSONL лог
@@ -64,7 +41,6 @@ export function markProcessed(updateId) {
     return false; // уже обработан
   }
   processedUpdates.add(updateId);
-  // Очистка старых если слишком много
   if (processedUpdates.size > MAX_PROCESSED_CACHE) {
     const toDelete = Array.from(processedUpdates).slice(0, 1000);
     toDelete.forEach(id => processedUpdates.delete(id));
@@ -91,12 +67,12 @@ export function generateMappingId() {
  * === CONNECTIONS ===
  */
 export function getConnections() {
-  return loadJson('connections.json', {});
+  const rows = getDb().prepare('SELECT id, data FROM connections').all();
+  return Object.fromEntries(rows.map(r => [r.id, JSON.parse(r.data)]));
 }
 
 export function saveConnection(connection) {
-  const connections = getConnections();
-  connections[connection.id] = {
+  const data = {
     id: connection.id,
     user_chat_id: connection.user_chat_id,
     user: connection.user,
@@ -105,74 +81,73 @@ export function saveConnection(connection) {
     is_enabled: connection.is_enabled,
     updated_at: new Date().toISOString()
   };
-  saveJson('connections.json', connections);
+  getDb().prepare('INSERT OR REPLACE INTO connections (id, data) VALUES (?, ?)')
+    .run(String(connection.id), JSON.stringify(data));
   appendLog({ type: 'connection', connection_id: connection.id, action: 'saved' });
-  return connections[connection.id];
+  return data;
 }
 
 /**
- * === CONTACTS ===
+ * === CONTACTS === (telegram-метаданные; идентичность/политики — в identity.js)
  */
 export function getContacts() {
-  return loadJson('contacts.json', {});
+  const rows = getDb().prepare('SELECT id, data FROM contacts').all();
+  return Object.fromEntries(rows.map(r => [r.id, JSON.parse(r.data)]));
 }
 
 export function updateContact(user, businessConnectionId) {
-  const contacts = getContacts();
+  const db = getDb();
   const id = String(user.id);
-  
-  if (!contacts[id]) {
-    contacts[id] = {
-      id: user.id,
-      username: user.username || null,
-      first_name: user.first_name || '',
-      last_name: user.last_name || '',
-      first_seen: new Date().toISOString(),
-      last_seen: new Date().toISOString(),
-      message_count: 0,
-      business_connections: []
-    };
+  const row = db.prepare('SELECT data FROM contacts WHERE id = ?').get(id);
+  const contact = row ? JSON.parse(row.data) : {
+    id: user.id,
+    username: user.username || null,
+    first_name: user.first_name || '',
+    last_name: user.last_name || '',
+    first_seen: new Date().toISOString(),
+    message_count: 0,
+    business_connections: []
+  };
+
+  contact.last_seen = new Date().toISOString();
+  contact.message_count = (contact.message_count || 0) + 1;
+  contact.username = user.username || contact.username;
+  contact.first_name = user.first_name || contact.first_name;
+  contact.last_name = user.last_name || contact.last_name;
+  if (businessConnectionId && !contact.business_connections.includes(businessConnectionId)) {
+    contact.business_connections.push(businessConnectionId);
   }
-  
-  contacts[id].last_seen = new Date().toISOString();
-  contacts[id].message_count++;
-  contacts[id].username = user.username || contacts[id].username;
-  contacts[id].first_name = user.first_name || contacts[id].first_name;
-  contacts[id].last_name = user.last_name || contacts[id].last_name;
-  
-  if (businessConnectionId && !contacts[id].business_connections.includes(businessConnectionId)) {
-    contacts[id].business_connections.push(businessConnectionId);
-  }
-  
-  saveJson('contacts.json', contacts);
-  return contacts[id];
+
+  db.prepare('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)')
+    .run(id, JSON.stringify(contact));
+  return contact;
 }
 
 /**
  * === CONVERSATIONS ===
- * Маппинг: mapping_id → { business_connection_id, business_chat_id, sender_id }
+ * Маппинг: mapping_id → { business_connection_id, business_chat_id, sender_* }
  */
 export function getConversations() {
-  return loadJson('conversations.json', {});
+  const rows = getDb().prepare('SELECT mapping_id, data FROM conversations').all();
+  return Object.fromEntries(rows.map(r => [r.mapping_id, JSON.parse(r.data)]));
 }
 
 export function getOrCreateMapping(businessConnectionId, businessChatId, sender) {
-  const conversations = getConversations();
-  
-  // Ищем существующий маппинг для этой комбинации
-  for (const [mappingId, data] of Object.entries(conversations)) {
-    if (data.business_connection_id === businessConnectionId && 
-        data.business_chat_id === businessChatId) {
-      // Обновляем timestamp
-      data.last_message_at = new Date().toISOString();
-      saveJson('conversations.json', conversations);
-      return { mappingId, isNew: false, ...data };
-    }
+  const db = getDb();
+  const existing = db.prepare(
+    'SELECT mapping_id, data FROM conversations WHERE business_connection_id = ? AND business_chat_id = ?'
+  ).get(String(businessConnectionId), String(businessChatId));
+
+  if (existing) {
+    const data = JSON.parse(existing.data);
+    data.last_message_at = new Date().toISOString();
+    db.prepare('UPDATE conversations SET data = ? WHERE mapping_id = ?')
+      .run(JSON.stringify(data), existing.mapping_id);
+    return { mappingId: existing.mapping_id, isNew: false, ...data };
   }
-  
-  // Создаём новый маппинг
+
   const mappingId = generateMappingId();
-  conversations[mappingId] = {
+  const data = {
     business_connection_id: businessConnectionId,
     business_chat_id: businessChatId,
     sender_id: sender.id,
@@ -181,34 +156,31 @@ export function getOrCreateMapping(businessConnectionId, businessChatId, sender)
     created_at: new Date().toISOString(),
     last_message_at: new Date().toISOString()
   };
-  
-  saveJson('conversations.json', conversations);
+  db.prepare(
+    'INSERT INTO conversations (mapping_id, business_connection_id, business_chat_id, data) VALUES (?, ?, ?, ?)'
+  ).run(mappingId, String(businessConnectionId), String(businessChatId), JSON.stringify(data));
   appendLog({ type: 'mapping', mapping_id: mappingId, action: 'created', chat_id: businessChatId });
-  
-  return { mappingId, isNew: true, ...conversations[mappingId] };
+
+  return { mappingId, isNew: true, ...data };
 }
 
 export function getMapping(mappingId) {
-  const conversations = getConversations();
-  return conversations[mappingId] || null;
+  const row = getDb().prepare('SELECT data FROM conversations WHERE mapping_id = ?').get(mappingId);
+  return row ? JSON.parse(row.data) : null;
 }
 
 /**
  * Найти существующий маппинг по business-чату (без создания нового)
  */
 export function findMappingByChat(businessConnectionId, businessChatId) {
-  const conversations = getConversations();
-  for (const [mappingId, data] of Object.entries(conversations)) {
-    if (data.business_connection_id === businessConnectionId &&
-        data.business_chat_id === businessChatId) {
-      return { mappingId, ...data };
-    }
-  }
-  return null;
+  const row = getDb().prepare(
+    'SELECT mapping_id, data FROM conversations WHERE business_connection_id = ? AND business_chat_id = ?'
+  ).get(String(businessConnectionId), String(businessChatId));
+  return row ? { mappingId: row.mapping_id, ...JSON.parse(row.data) } : null;
 }
 
 /**
- * === LOGGING ===
+ * === LOGGING === (JSONL с ротацией — см. rotateLogs)
  */
 export function logUpdate(update) {
   appendLog({ type: 'update', update_id: update.update_id, raw: update });
@@ -245,28 +217,17 @@ export function rotateLogs(ttlDays = parseInt(process.env.LOG_TTL_DAYS || '30', 
 
 /**
  * === CONVERSATION HISTORY ===
- * Хранит историю сообщений для каждого mapping_id в отдельном JSONL файле
+ * История диалога per thread_id (mapping_id / lead-<id> / vk-<peer>).
+ * Возвращается ХРОНОЛОГИЧЕСКИ (старые → новые) — инвариант проекта.
  */
-export function getConversationHistory(mappingId, limit = 10) {
-  const filepath = path.join(STATE_DIR, 'conversations', `${mappingId}.jsonl`);
-  try {
-    if (!fs.existsSync(filepath)) {
-      return [];
-    }
-    const lines = fs.readFileSync(filepath, 'utf-8').trim().split('\n').filter(Boolean);
-    return lines.slice(-limit).map(line => JSON.parse(line));
-  } catch (err) {
-    console.error(`Error loading history for ${mappingId}:`, err.message);
-    return [];
-  }
+export function getConversationHistory(threadId, limit = 10) {
+  const rows = getDb().prepare(
+    'SELECT ts, role, text FROM history WHERE thread_id = ? ORDER BY id DESC LIMIT ?'
+  ).all(String(threadId), limit);
+  return rows.reverse().map(r => ({ ts: r.ts, from: r.role, text: r.text }));
 }
 
-export function appendConversationHistory(mappingId, from, text) {
-  const convDir = path.join(STATE_DIR, 'conversations');
-  if (!fs.existsSync(convDir)) {
-    fs.mkdirSync(convDir, { recursive: true });
-  }
-  const filepath = path.join(convDir, `${mappingId}.jsonl`);
-  const entry = { ts: new Date().toISOString(), from, text };
-  fs.appendFileSync(filepath, JSON.stringify(entry) + '\n', 'utf-8');
+export function appendConversationHistory(threadId, from, text) {
+  getDb().prepare('INSERT INTO history (thread_id, ts, role, text) VALUES (?, ?, ?, ?)')
+    .run(String(threadId), new Date().toISOString(), from, text);
 }
