@@ -38,7 +38,7 @@ OpenAI-совместимый API или OpenClaw-инстанс с единой
 - **Автопостинг канала**: по расписанию и контент-плану (или `/post тема`), публикация
   только после твоего «📤»; **лид-воронка**: кнопка под постом → личка бота → «🔥 Лид» тебе
 - Реалистичность: «прочитано» и «печатает…» перед ответом; ротация логов с переписками
-- **ВКонтакте**: личные сообщения сообществу (Callback API) с той же памятью;
+- **ВКонтакте и WhatsApp**: личные сообщения сообществу/бизнес-номеру с той же памятью;
   «Иван из ВК» и «Иван из Telegram» объединяются в одну персону по твоему подтверждению
 
 ## Архитектура
@@ -50,7 +50,7 @@ OpenAI-совместимый API или OpenClaw-инстанс с единой
 flowchart LR
     DM["Telegram Business<br>(личка) ✅"] --> E
     CH["Канал / комменты / лиды ✅"] --> E
-    VK["ВКонтакте (ЛС сообществу) ✅<br>WhatsApp, IG — позже"] --> E
+    VK["ВКонтакте ✅ · WhatsApp ✅<br>Instagram — исследовано"] --> E
     E["коннектор →<br>конверт"] --> BR{"Brain<br>+ политики"}
     BR -->|stateless-llm| LLM["LiteLLM / OpenRouter / …"]
     BR -->|openclaw| OC["OpenClaw-инстанс"]
@@ -63,22 +63,24 @@ flowchart LR
 
 ```
 src/
-  server.js                 # точка входа: валидация env, listen
-  app.js                    # Express: webhook, политики, админ-API
+  server.js                 # точка входа: валидация env, listen, фоновые циклы
+  app.js                    # Express: webhooks (TG/VK/WA), политики, админ-API
   scheduler.js              # очередь отложенных ответов (переживает рестарт)
-  core/
-    envelope.js             # платформо-нейтральный конверт + capabilities
-    brain.js                # интерфейс мозга, выбор драйвера
-    persona.js              # персона из persona/ (шаблоны, disclosure per-surface)
-    identity.js             # персоны: память по людям, политики, явное слияние
-    instances.js            # реестр инстансов + маршрутизация поверхностей
+  core/                     # платформо-нейтральное ядро
+    envelope.js  brain.js  persona.js  identity.js  instances.js
+    prompt.js  modes.js  drafts.js  ratelimit.js  db.js (SQLite)  format.js
   brains/
     stateless-llm.js        # OpenAI-совместимый endpoint, локальная история
     openclaw.js             # сессии OpenClaw per-человек, единая память
-  connectors/telegram/
-    business.js             # Telegram Business ↔ конверт
+  connectors/
+    telegram/               # business (личка), control (пульт), community
+                            # (комменты/Q&A/лиды), channel (автопостинг), stt
+    vk/                     # ЛС сообществу (Callback API)
+    whatsapp/               # личка бизнес-номера (Cloud API)
 persona/                    # конфиг персоны: persona.json, base.md, dm.md, public.md
 ```
+
+Подробная карта модулей и функций: [docs/code-map.md](./docs/code-map.md).
 
 ## Быстрый старт
 
@@ -104,7 +106,7 @@ docker compose --profile gateway up -d
 ```bash
 npm install
 npm start          # боевой запуск
-npm test           # тесты (29, node:test)
+npm test           # тесты (node:test)
 # локально без токенов и LLM:
 DRY_RUN=true DRY_RUN_BRAIN=true OWNER_CHAT_ID=1 npm start
 ```
@@ -172,6 +174,7 @@ curl -X POST -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' \
 |---|---|
 | [docs/architecture.md](./docs/architecture.md) | Текущая архитектура: компоненты, поток сообщения, стейт (mermaid) |
 | [docs/operations.md](./docs/operations.md) | Управление и эксплуатация: режимы, политики, мониторинг, бэкап |
+| [docs/code-map.md](./docs/code-map.md) | Карта кода: модули, функции, «какая переменная что включает» |
 | [docs/openclaw-integration.md](./docs/openclaw-integration.md) | Целевая архитектура: единая память, мультиплатформенность |
 | [docs/deployment.md](./docs/deployment.md) | Развёртывание: Docker, PM2, Nginx, webhook |
 | [docs/vika-style.md](./docs/vika-style.md) | Стиль общения секретаря |

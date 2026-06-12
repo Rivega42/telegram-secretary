@@ -40,6 +40,8 @@ docker compose --profile gateway up -d    # прокси + OpenClaw Gateway
 - `src/connectors/telegram/control.js` — control plane: команды/кнопки владельца (long-polling бота уведомлений)
 - `src/connectors/telegram/community.js` — комментарии канала, Q&A в группах, лид-воронка
 - `src/connectors/telegram/channel.js` — автопостинг по контент-плану (только через черновик)
+- `src/connectors/vk/`, `src/connectors/whatsapp/` — ЛС сообществу ВК / бизнес-номеру WA (та же схема: конверт → политики → Brain)
+- Карта модулей и функций — `docs/code-map.md` (обновлять при добавлении модулей)
 - `src/state.js` + `src/core/db.js` — стейт в SQLite (`STATE_DIR/secretary.db`, better-sqlite3): контакты, маппинги, история, персоны, pending; авто-миграция из старых JSON
 - `src/forward.js` — отправка через Telegram API, уважает `DRY_RUN`
 - `persona/` — конфиг персоны (persona.json, base.md, dm.md, public.md)

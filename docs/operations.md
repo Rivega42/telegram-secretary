@@ -121,6 +121,19 @@ sequenceDiagram
 предложение склейки «✅ Это один человек / ❌ Разные» (память объединяется только
 по подтверждению).
 
+## WhatsApp (личка бизнес-номера)
+
+1. В [Meta for Developers](https://developers.facebook.com): приложение → WhatsApp →
+   получи **permanent token** и **Phone Number ID**
+2. Webhooks: callback `https://<домен>/wa/webhook`, придумай **verify token**,
+   подпишись на поле `messages`
+3. `.env`: `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_VERIFY_TOKEN`
+   (+ `WA_APP_SECRET` для проверки подписи событий) → рестарт
+
+Поведение как у ВК: бизнес-номер — явный «офис», ответ сразу (всегда внутри
+24-часового окна, т.к. отвечаем на входящие). `/draft`, политики и склейка
+персон действуют. ⚠️ Диалоги в WhatsApp платные (тариф Meta) — следи за объёмом.
+
 ## Автопостинг канала
 
 1. Сделай бота уведомлений **админом канала**, укажи `CHANNEL_ID=@my_channel`
