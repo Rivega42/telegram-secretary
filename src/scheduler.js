@@ -4,9 +4,9 @@
  * pendingTasks: Map<businessChatId, { mappingId, businessConnectionId, senderInfo, originalText, scheduledAt, timeoutHandle }>
  * 
  * Правила:
- * - 08:00-18:00 МСК → 5 минут задержки (рабочий день)
+ * - 08:00-18:00 МСК → 2 минуты задержки (рабочий день)
  * - 18:00-08:00 МСК → 3 минуты задержки (вечер/ночь)
- * - Если Роман ответил сам в этот чат → pending отменяется
+ * - Если владелец ответил сам в этот чат → pending отменяется
  */
 
 import fs from 'fs';
@@ -55,7 +55,12 @@ function savePendingToFile() {
       senderInfo: task.senderInfo,
       originalText: task.originalText,
       scheduledAt: task.scheduledAt,
-      delayMs: task.delayMs
+      delayMs: task.delayMs,
+      // новые поля (этапы 1–2): конверт, персона, id уведомления; старые
+      // pending.json без них корректно обрабатываются при выполнении (см. app.js)
+      envelope: task.envelope,
+      personId: task.personId,
+      notifyMessageId: task.notifyMessageId
     };
   }
   try {
@@ -94,6 +99,8 @@ export function loadPendingFromFile() {
         const timeoutHandle = setTimeout(() => {
           executePending(chatId);
         }, remainingMs);
+        // Таймер не должен держать процесс живым сам по себе (его держит HTTP-сервер)
+        timeoutHandle.unref();
         
         pendingTasks.set(chatId, {
           ...task,
@@ -110,25 +117,32 @@ export function loadPendingFromFile() {
 }
 
 /**
- * Создать pending task
+ * Создать pending task.
+ * extra: {
+ *   envelope, personId      — конверт сообщения и ID персоны (этап 1)
+ *   delayMs                 — переопределение задержки (режим vacation)
+ *   notifyMessageId         — id уведомления владельцу (debounce-редактирование)
+ * }
  */
-export function createPending(mapping, senderInfo, originalText) {
+export function createPending(mapping, senderInfo, originalText, extra = {}) {
   const chatId = String(mapping.business_chat_id);
-  
+
   // Если уже есть pending для этого чата — отменить старый
   if (pendingTasks.has(chatId)) {
     console.log(`[Scheduler] Replacing existing pending for chat ${chatId}`);
     cancelPending(chatId, 'replaced by new message');
   }
-  
-  const delayMinutes = getDelayMinutes();
-  const delayMs = delayMinutes * 60 * 1000;
+
+  const delayMs = extra.delayMs ?? getDelayMinutes() * 60 * 1000;
+  const delayMinutes = Math.round(delayMs / 60000 * 10) / 10;
   const scheduledAt = new Date().toISOString();
-  
+
   const timeoutHandle = setTimeout(() => {
     executePending(chatId);
   }, delayMs);
-  
+  // Таймер не должен держать процесс живым сам по себе (его держит HTTP-сервер)
+  timeoutHandle.unref();
+
   const task = {
     mappingId: mapping.mappingId,
     businessConnectionId: mapping.business_connection_id,
@@ -137,6 +151,9 @@ export function createPending(mapping, senderInfo, originalText) {
     originalText,
     scheduledAt,
     delayMs,
+    envelope: extra.envelope,
+    personId: extra.personId,
+    notifyMessageId: extra.notifyMessageId,
     timeoutHandle
   };
   
@@ -194,6 +211,36 @@ async function executePending(chatId) {
   } else {
     console.error('[Scheduler] No execute callback set!');
   }
+}
+
+/**
+ * Выполнить pending немедленно (кнопка «Ответить сейчас» у владельца).
+ */
+export async function executePendingNow(chatId) {
+  const chatIdStr = String(chatId);
+  const task = pendingTasks.get(chatIdStr);
+  if (!task) return false;
+  clearTimeout(task.timeoutHandle);
+  await executePending(chatIdStr);
+  return true;
+}
+
+/**
+ * Получить pending-задачу чата (для control plane).
+ */
+export function getPendingTask(chatId) {
+  return pendingTasks.get(String(chatId)) || null;
+}
+
+/**
+ * Обновить сохранённый id уведомления владельцу (debounce-редактирование).
+ */
+export function setPendingNotifyMessageId(chatId, messageId) {
+  const task = pendingTasks.get(String(chatId));
+  if (!task) return false;
+  task.notifyMessageId = messageId;
+  savePendingToFile();
+  return true;
 }
 
 /**

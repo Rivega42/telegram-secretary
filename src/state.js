@@ -73,6 +73,14 @@ export function markProcessed(updateId) {
 }
 
 /**
+ * Снять пометку «обработан» — вызывается при ошибке обработки,
+ * чтобы повторная доставка от Telegram не была отброшена как дубликат
+ */
+export function unmarkProcessed(updateId) {
+  processedUpdates.delete(updateId);
+}
+
+/**
  * Генерировать короткий mapping_id (6 символов)
  */
 export function generateMappingId() {
@@ -186,6 +194,20 @@ export function getMapping(mappingId) {
 }
 
 /**
+ * Найти существующий маппинг по business-чату (без создания нового)
+ */
+export function findMappingByChat(businessConnectionId, businessChatId) {
+  const conversations = getConversations();
+  for (const [mappingId, data] of Object.entries(conversations)) {
+    if (data.business_connection_id === businessConnectionId &&
+        data.business_chat_id === businessChatId) {
+      return { mappingId, ...data };
+    }
+  }
+  return null;
+}
+
+/**
  * === LOGGING ===
  */
 export function logUpdate(update) {
@@ -194,6 +216,31 @@ export function logUpdate(update) {
 
 export function logOutgoing(mappingId, text, success) {
   appendLog({ type: 'outgoing', mapping_id: mappingId, text_preview: text.slice(0, 100), success });
+}
+
+/**
+ * Ротация логов: log-YYYY-MM-DD.jsonl старше LOG_TTL_DAYS удаляются
+ * (логи содержат тексты переписок — не храним вечно).
+ * Вызывается при старте и раз в сутки (см. server.js).
+ */
+export function rotateLogs(ttlDays = parseInt(process.env.LOG_TTL_DAYS || '30', 10)) {
+  if (ttlDays <= 0) return 0; // 0 или меньше — ротация выключена
+  const cutoff = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  try {
+    for (const file of fs.readdirSync(STATE_DIR)) {
+      const m = file.match(/^log-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (!m) continue;
+      if (new Date(m[1]).getTime() < cutoff) {
+        fs.unlinkSync(path.join(STATE_DIR, file));
+        removed++;
+      }
+    }
+    if (removed) console.log(`[State] Ротация логов: удалено файлов: ${removed} (старше ${ttlDays} дн.)`);
+  } catch (err) {
+    console.error('[State] Ошибка ротации логов:', err.message);
+  }
+  return removed;
 }
 
 /**

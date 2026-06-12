@@ -1,0 +1,59 @@
+name: Автообновление документации
+
+# После попадания изменений кода в main Claude Code сверяет документацию с кодом
+# и, если она устарела, открывает PR с обновлениями (CHANGELOG, README, docs/).
+#
+# Требует секрет ANTHROPIC_API_KEY (Settings → Secrets → Actions).
+# Без секрета job завершается без ошибки.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - ".env.example"
+  workflow_dispatch:
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Проверка наличия секрета
+        id: secret
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "ANTHROPIC_API_KEY не задан — пропускаю автообновление документации."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.secret.outputs.present == 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Claude Code — сверка документации с кодом
+        if: steps.secret.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Ты — мейнтейнер документации этого репозитория. Только что в main попали изменения кода.
+
+            1. Посмотри последние изменения: `git log --oneline -5` и `git diff HEAD~1 HEAD -- src/ .env.example`.
+            2. Сверь с документацией: README.md (возможности, конфигурация, эндпоинты),
+               docs/architecture.md (поток сообщения, стейт, эндпоинты), .env.example, CHANGELOG.md.
+            3. Если документация разошлась с кодом — исправь её. Пиши на русском,
+               следуй правилам из CLAUDE.md (раздел «Правила синхронизации документации»).
+            4. Если правки есть — создай ветку docs/auto-sync-<дата>, закоммить
+               (`docs: автосинхронизация документации с кодом`), запушь и открой draft-PR в main.
+            5. Если документация актуальна — ничего не делай и заверши работу.
+
+            Не меняй файлы в src/ — только документацию.
+          claude_args: "--allowedTools Bash(git:*),Read,Write,Edit,Glob,Grep"

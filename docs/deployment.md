@@ -1,23 +1,54 @@
-# Развёртывание GH-Secretary
+# Развёртывание telegram-secretary
 
 ## Требования
 
-- Node.js ≥ 18
-- PM2 (или systemd)
+- Docker (рекомендуется) **или** Node.js ≥ 18 + PM2
 - Nginx с публичным HTTPS-доменом для webhook
 - Два Telegram бота:
-  - **VikaSecretary_bot** — с включённым Business Mode (через @BotFather → Bot Settings → Business Mode)
-  - **OneInt_bot** — обычный бот для уведомлений владельцу
+  - **Business-бот** — с включённым Business Mode (через @BotFather → Bot Settings → Business Mode)
+  - **Бот уведомлений** — обычный бот для control plane владельца
 
-## Шаги
+## Вариант А: Docker (рекомендуется)
+
+```bash
+git clone https://github.com/Rivega42/telegram-secretary.git /opt/telegram-secretary
+cd /opt/telegram-secretary
+cp .env.example .env && chmod 600 .env
+nano .env                      # заполнить (см. шаг «Конфигурация» ниже)
+
+docker compose up -d           # только прокси
+# или вместе с локальным OpenClaw Gateway (единая память):
+docker compose --profile gateway up -d
+
+docker compose logs -f secretary
+curl http://127.0.0.1:18792/health
+```
+
+Стейт живёт в named volume `secretary-state` (внутри контейнера `/data`) и переживает
+пересоздание контейнера. Бэкап: `docker run --rm -v secretary-state:/data -v $(pwd):/backup
+alpine tar czf /backup/secretary-state.tar.gz /data`.
+
+Обновление:
+
+```bash
+cd /opt/telegram-secretary
+git pull
+docker compose up -d --build
+```
+
+Дальше — шаги 4–6 (Nginx, регистрация webhook, подключение Business).
+
+## Вариант Б: PM2
+
+### Шаги
 
 ### 1. Подготовка сервера
 
 ```bash
-git clone git@github.com:Rivega42/gh-secretary.git /opt/gh-secretary
-cd /opt/gh-secretary
-npm ci --omit=dev
-mkdir -p /opt/gh-secretary/state
+git clone git@github.com:Rivega42/telegram-secretary.git /opt/telegram-secretary
+cd /opt/telegram-secretary
+npm install --omit=dev
+mkdir -p /opt/telegram-secretary/state
 ```
 
 ### 2. Конфигурация
@@ -32,8 +63,10 @@ nano .env
 - `BUSINESS_BOT_TOKEN` — токен @VikaSecretary_bot
 - `ONEINT_BOT_TOKEN` — токен @OneInt_bot
 - `OWNER_CHAT_ID` — Telegram ID владельца
-- `WEBHOOK_SECRET` — случайная строка (используется в URL пути)
+- `WEBHOOK_SECRET` — случайная строка (проверяется в заголовке webhook)
+- `API_KEY` — случайная строка для авторизации админ-API `/api/*`
 - `STATE_DIR` — путь к каталогу состояния
+- LLM: `LITELLM_BASE_URL`+`LITELLM_API_KEY`+`VIKA_MODEL` либо `GW_BASE_URL`+`GW_API_KEY`
 
 ### 3. PM2
 
@@ -55,7 +88,7 @@ curl http://127.0.0.1:18792/health
 Положить `nginx/secretary-webhook.conf` в `/etc/nginx/sites-available/`, симлинк в `sites-enabled/`, перезагрузить:
 
 ```bash
-ln -sf /opt/gh-secretary/nginx/secretary-webhook.conf /etc/nginx/sites-available/
+ln -sf /opt/telegram-secretary/nginx/secretary-webhook.conf /etc/nginx/sites-available/
 ln -sf /etc/nginx/sites-available/secretary-webhook.conf /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 ```
@@ -102,15 +135,15 @@ curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo" | jq
 
 1. Любой контакт пишет владельцу
 2. В `log-YYYY-MM-DD.jsonl` появится запись с `kind: "business_message"`
-3. Через **5 минут** (днём) либо **3 минуты** (ночью) — Вика отвечает в чат от имени владельца
+3. Через **2 минуты** (днём) либо **3 минуты** (ночью) — Вика отвечает в чат от имени владельца
 4. Если владелец ответил сам — отложенный ответ отменяется
 
 ## Обновление
 
 ```bash
-cd /opt/gh-secretary
+cd /opt/telegram-secretary
 git pull
-npm ci --omit=dev
+npm install --omit=dev
 pm2 restart secretary-proxy
 ```
 
@@ -128,6 +161,6 @@ tar czf /backup/secretary-state-$(date +%Y%m%d).tar.gz $STATE_DIR
 
 ```bash
 git checkout <previous-tag>
-npm ci --omit=dev
+npm install --omit=dev
 pm2 restart secretary-proxy
 ```
