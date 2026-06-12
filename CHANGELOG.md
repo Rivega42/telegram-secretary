@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+### Добавлено (этап 4 — WhatsApp, #22)
+- **Коннектор WhatsApp** (`src/connectors/whatsapp/`): личка бизнес-номера через
+  Business Cloud API — `GET /wa/webhook` (верификация подписки), `POST /wa/webhook`
+  (события `messages`, проверка подписи `X-Hub-Signature-256` через `WA_APP_SECRET`,
+  дедупликация по message.id); ответ сразу (всегда внутри 24-часового окна);
+  `/draft`, политики персон и склейка памяти между платформами действуют
+- `express.json` сохраняет rawBody для проверки подписей webhook'ов
+- Тесты: +7 (верификация, подпись, конверт, поток, draft, эскалация/не-текст,
+  дедупликация) — всего 78
+
+### Документация
+- **`docs/code-map.md`** (новый): карта кода — зависимости модулей (mermaid),
+  таблицы «модуль → ответственность → ключевые функции», матрица
+  «какая env-переменная что включает и где код», чеклист добавления новой платформы
+- `docs/architecture.md`: карта компонентов актуализирована (ВК, WhatsApp,
+  автопостинг, лиды, STT, SQLite)
+- README: актуальная структура src/, фичи ВК+WA, ссылка на карту кода
+
 ### Изменено (этап 5 — SQLite вместо JSON-файлов, #26)
 - Стейт переведён на **SQLite** (`better-sqlite3`, WAL): `STATE_DIR/secretary.db` —
   таблицы connections, contacts, conversations, history, persons (+person_identities

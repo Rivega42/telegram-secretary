@@ -20,20 +20,23 @@
 flowchart TB
     CLIENT(["Контакт в Telegram"]) -->|пишет владельцу| TGAPI["Telegram Business API"]
     OWNER(["Владелец"]) -.->|отвечает сам| TGAPI
-    TGAPI -->|"webhook (update)"| APP
+    TGAPI -->|"webhook"| APP
+    VKU(["Клиент во ВКонтакте"]) --> VKAPI["VK Callback API"] -->|"/vk/callback"| APP
+    WAU(["Клиент в WhatsApp"]) --> WAAPI["WA Cloud API"] -->|"/wa/webhook"| APP
 
     subgraph PROXY["secretary-proxy (Express)"]
-        APP["app.js<br>webhook + админ-API"]
-        CONN["connectors/telegram/business.js<br>telegram-поля ↔ конверт"]
+        APP["app.js<br>webhooks + админ-API"]
+        CONN["connectors/telegram/business.js<br>+ stt.js (голос → текст)"]
+        VKC["connectors/vk/"]
+        WAC["connectors/whatsapp/"]
         SCHED["scheduler.js<br>задержка 2/3 мин, отмена"]
 
         subgraph CORE["ядро src/core/ — платформо-нейтральное"]
             ENV["envelope.js<br>конверт + capabilities"]
-            IDENT["identity.js<br>персоны и политики"]
+            IDENT["identity.js<br>персоны, политики,<br>склейка по подтверждению"]
             PERS["persona.js<br>характер из persona/"]
             BRAIN["brain.js<br>интерфейс мозга"]
             INST["instances.js<br>реестр + маршрутизация"]
-            PROMPT["prompt.js<br>общий промпт-билдер"]
         end
 
         subgraph BRAINS["драйверы src/brains/"]
@@ -42,38 +45,33 @@ flowchart TB
         end
 
         CTRL["connectors/telegram/control.js<br>команды и кнопки владельца"]
-        COMM["connectors/telegram/community.js<br>комментарии канала, Q&A в чате<br>(+ rate-limit, публичные черновики)"]
+        COMM["community.js<br>комменты, Q&A, лиды"]
+        CHAN["channel.js<br>автопостинг по плану"]
         MODES["core/modes.js + drafts.js<br>режимы, черновики"]
         FWD["forward.js<br>отправка, DRY_RUN"]
-        STATE[("state.js + STATE_DIR<br>история, маппинги,<br>persons, pending")]
+        DB[("secretary.db (SQLite)<br>персоны, история,<br>маппинги, pending")]
     end
 
-    APP --> CONN --> ENV
+    APP --> CONN & VKC & WAC --> ENV
     APP --> IDENT
     APP --> SCHED --> BRAIN
-    BRAIN --> INST
+    VKC & WAC & COMM & CHAN --> BRAIN
+    BRAIN --> INST & PERS
     BRAIN --> SLLM & OCLAW
-    SLLM & OCLAW --> PROMPT & PERS
     SLLM -->|"chat/completions"| LLM["LiteLLM / OpenRouter /<br>любой OpenAI-совместимый"]
     OCLAW -->|"сессия + user"| OC["OpenClaw-инстанс"]
     OC --- WS[("workspace<br>единая память")]
-    APP --> FWD
-    SCHED --> FWD
-    FWD -->|"ответ от имени владельца"| TGAPI
-    FWD -->|"уведомления, копии,<br>эскалации, черновики"| NOTIFY["Бот уведомлений<br>(личка владельца)"]
-    NOTIFY -->|"команды /on /off /vacation /draft,<br>кнопки (long-polling)"| CTRL
-    GROUP(["Discussion-группа канала /<br>групповой чат"]) -->|"тот же long-polling"| CTRL
-    CTRL -->|"сообщения групп"| COMM
-    COMM --> BRAIN
-    COMM -->|"черновик владельцу"| FWD
-    CTRL --> MODES
-    CTRL --> SCHED
-    APP --> MODES
-    APP <--> STATE
+    SCHED & APP & COMM & CHAN --> FWD
+    FWD -->|"ответы от имени владельца"| TGAPI & VKAPI & WAAPI
+    FWD -->|"уведомления, эскалации,<br>черновики с кнопками"| NOTIFY["Бот уведомлений<br>(пульт владельца)"]
+    NOTIFY -->|"команды, кнопки,<br>группы, лиды (long-polling)"| CTRL
+    CTRL --> COMM & CHAN & MODES & SCHED
+    APP & IDENT & SCHED <--> DB
 ```
 
-Ключевое правило слоёв: **telegram-специфичные поля не выходят за пределы
+Ключевое правило слоёв: **платформо-специфичные поля не выходят за пределы
 `connectors/`** — ядро и драйверы видят только конверт (`envelope`).
+Подробный справочник модулей и функций — [`code-map.md`](./code-map.md).
 
 ## Поток входящего сообщения
 

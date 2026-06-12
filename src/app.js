@@ -47,6 +47,8 @@ import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
 import { sendVkMessage } from './connectors/vk/api.js';
+import { waVerifyHandler, waWebhookHandler } from './connectors/whatsapp/webhook.js';
+import { sendWaMessage } from './connectors/whatsapp/api.js';
 import {
   setExecuteCallback,
   createPending,
@@ -256,6 +258,16 @@ export function createControlActions() {
         return '📤 Отправлено (VK)';
       }
 
+      // Личка WhatsApp бизнес-номера
+      if (draft.kind === 'wa') {
+        const result = await sendWaMessage(draft.wa_id, draft.text);
+        if (!result.ok) return `⚠️ ${result.error}`;
+        appendConversationHistory(draft.thread_id, 'vika', draft.text);
+        logOutgoing(draftKey, draft.text, true);
+        deleteDraft(draftKey);
+        return '📤 Отправлено (WA)';
+      }
+
       // Пост в канал (автопостинг)
       if (draft.kind === 'channel') {
         const result = await sendGroupReply(draft.chat_id, null, draft.text);
@@ -315,7 +327,10 @@ export function createApp() {
 
   const app = express();
 
-  app.use(express.json());
+  // rawBody нужен для проверки подписи WhatsApp (X-Hub-Signature-256)
+  app.use(express.json({
+    verify: (req, res, buf) => { req.rawBody = buf; }
+  }));
 
   app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -570,6 +585,13 @@ export function createApp() {
    * 503, пока не заданы VK_GROUP_TOKEN и VK_CONFIRMATION_CODE.
    */
   app.post('/vk/callback', vkCallbackHandler);
+
+  /**
+   * WhatsApp Business Cloud API (этап 4).
+   * 503, пока не заданы WA_TOKEN, WA_PHONE_NUMBER_ID, WA_VERIFY_TOKEN.
+   */
+  app.get('/wa/webhook', waVerifyHandler);
+  app.post('/wa/webhook', waWebhookHandler);
 
   app.post('/api/reply', async (req, res) => {
     const { mapping_id, text } = req.body;
