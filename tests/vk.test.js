@@ -75,8 +75,8 @@ test('handleVkMessage: ответ сразу (DRY_RUN), история ведё�
   );
   assert.equal(result.action, 'replied');
 
-  const file = path.join(TMP, 'conversations', 'vk-100.jsonl');
-  const lines = fs.readFileSync(file, 'utf-8').trim().split('\n').filter(Boolean).map(JSON.parse);
+  const { getConversationHistory } = await import('../src/state.js');
+  const lines = getConversationHistory('vk-100', 100);
   assert.equal(lines[0].from, 'client');
   assert.ok(lines.some(l => l.from === 'vika'));
 });

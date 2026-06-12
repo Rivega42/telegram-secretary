@@ -32,3 +32,9 @@ pm2.log
 .idea/
 .DS_Store
 *.swp
+
+# SQLite-стейт
+*.db
+*.db-wal
+*.db-shm
+*.migrated

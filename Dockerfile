@@ -8,9 +8,14 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Зависимости отдельным слоем — кэшируется, пока не меняется package*.json
+# Зависимости отдельным слоем — кэшируется, пока не меняется package*.json.
+# better-sqlite3 обычно ставится из prebuilt-биндингов; build-деты — страховка
+# на случай их отсутствия для текущей платформы (затем удаляются).
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN apk add --no-cache --virtual .build-deps python3 make g++ \
+  && npm ci --omit=dev \
+  && apk del .build-deps \
+  && npm cache clean --force
 
 COPY src ./src
 COPY persona ./persona

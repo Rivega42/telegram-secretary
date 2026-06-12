@@ -118,31 +118,32 @@ sequenceDiagram
 
 ## Данные: кто что хранит
 
+Основной стейт — **SQLite** `secretary.db` (better-sqlite3, WAL, issue #26);
+старые JSON-файлы импортируются автоматически при первом старте (`*.migrated`).
+
 ```mermaid
 flowchart LR
     subgraph STATE_DIR["STATE_DIR (в Docker — volume /data)"]
-        P1["persons.json<br>люди, identities, политики"]
-        P2["conversations/&lt;id&gt;.jsonl<br>история: client/vika/owner,<br>хронологически"]
-        P3["pending.json<br>очередь + конверт"]
-        P4["contacts.json, connections.json<br>telegram-стейт"]
-        P5["instances.json (опц.)<br>реестр мозгов"]
-        P6["log-YYYY-MM-DD.jsonl<br>все события"]
+        DB[("secretary.db (SQLite)<br>persons + identities · history<br>conversations · contacts<br>connections · pending")]
+        P5["instances.json, mode.json,<br>drafts.json, content-plan.json<br>лёгкие конфиги — файлами"]
+        P6["log-YYYY-MM-DD.jsonl<br>все события (ротация LOG_TTL_DAYS)"]
     end
     subgraph PERSONA_DIR["PERSONA_DIR"]
         Q1["persona.json + base.md<br>+ dm.md + public.md"]
     end
 ```
 
-| Файл | Содержание | Кто пишет |
+| Хранилище | Содержание | Кто пишет |
 |---|---|---|
-| `persons.json` | Персоны: identities per-платформа, политики `auto/escalate/ignore` | `core/identity.js` |
-| `conversations/<mapping>.jsonl` | История диалога, **хронологически**, роли `client`/`vika`/`owner` | `state.js` |
-| `pending.json` | Отложенные ответы (+конверт, +person_id); переживает рестарт | `scheduler.js` |
-| `contacts.json`, `connections.json` | Telegram-метаданные (статистика контактов, подключения) | `state.js` |
+| `secretary.db` → `persons`, `person_identities` | Персоны: identities per-платформа, политики `auto/escalate/ignore` (O(1)-резолв) | `core/identity.js` |
+| `secretary.db` → `history` | История диалогов per thread, **хронологически**, роли `client`/`vika`/`owner` | `state.js` |
+| `secretary.db` → `pending` | Отложенные ответы (+конверт, +person_id); переживает рестарт | `scheduler.js` |
+| `secretary.db` → `contacts`, `connections`, `conversations` | Telegram-метаданные и маппинги (индекс по чату) | `state.js` |
+| `mode.json`, `drafts.json`, `content-plan.json` | Лёгкие конфиги — остаются файлами (удобно править руками) | `core/modes.js`, `core/drafts.js`, `channel.js` |
 | `instances.json` | Реестр мозгов и маршрутизация; секреты через `${ENV}` | владелец (вручную) |
 | `log-*.jsonl` | Полный журнал событий | `state.js` |
 
-`contacts.json` и `persons.json` — намеренно разные сторы: contacts — сырые
+`contacts` и `persons` — намеренно разные сторы: contacts — сырые
 telegram-метаданные (статистика), persons — платформо-независимая идентичность
 и политики. Слияние персон между платформами — **только явное** (`/api/persons/:id/merge`).
 
@@ -169,11 +170,9 @@ telegram-метаданные (статистика), persons — платфор
 
 ## Известные ограничения (осознанные, MVP)
 
-- Файловый стейт с синхронным I/O: `persons.json` перечитывается на каждое сообщение,
-  история читается целиком — до ~50 активных диалогов в день это незаметно;
-  дальше — SQLite (роадмап, этап 5, issue #26).
-- Очередь pending ключуется telegram-`chat_id`; при добавлении второй платформы
-  будет переведена на `envelope.thread_key` (этап 4).
+- Очередь pending ключуется telegram-`chat_id` (ВК отвечает без pending);
+  при необходимости отложенных ответов на других платформах будет переведена
+  на `envelope.thread_key`.
 - Кэш `persona`/`instances` живёт до рестарта — правки конфигов требуют перезапуска.
 - При падении процесса в момент генерации ответа задача уже снята с очереди —
   ответ не ретраится (владелец видит отсутствие копии).

@@ -1,18 +1,9 @@
 /**
- * identity.js — слой персон: память ведётся по людям, а не по платформенным ID
+ * identity.js — слой персон поверх SQLite: память ведётся по людям,
+ * а не по платформенным ID
  *
- * persons.json в STATE_DIR:
- * {
- *   "seq": 2,
- *   "persons": {
- *     "person-0001": {
- *       "identities": { "telegram": "357896330" },
- *       "display_name": "...", "username": "...",
- *       "policy": "auto" | "escalate" | "ignore",
- *       "created_at": "...", "last_seen": "..."
- *     }
- *   }
- * }
+ * Таблицы (см. core/db.js): persons (данные), person_identities
+ * (platform+platform_user_id → person_id, O(1)-резолв).
  *
  * Правила (docs/openclaw-integration.md, раздел 3):
  * - один человек = одна персона, платформенные identity прикрепляются к ней
@@ -20,39 +11,25 @@
  *   слияние только по подтверждению владельца (mergePersons вызывается явно)
  */
 
-import fs from 'fs';
-import path from 'path';
-
-const STATE_DIR = process.env.STATE_DIR || './state';
-const PERSONS_FILE = path.join(STATE_DIR, 'persons.json');
+import { getDb } from './db.js';
 
 export const POLICIES = ['auto', 'escalate', 'ignore'];
 
-function load() {
-  try {
-    if (fs.existsSync(PERSONS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(PERSONS_FILE, 'utf-8'));
-      if (data && typeof data.persons === 'object') return data;
-    }
-  } catch (err) {
-    console.error('[Identity] Error loading persons.json:', err.message);
-  }
-  return { seq: 0, persons: {} };
+function rowToPerson(row) {
+  return { id: row.id, ...JSON.parse(row.data) };
 }
 
-function save(data) {
-  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(PERSONS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+function savePerson(db, id, person) {
+  const { id: _omit, isNew: _omit2, ...data } = person;
+  db.prepare('INSERT OR REPLACE INTO persons (id, data) VALUES (?, ?)')
+    .run(id, JSON.stringify(data));
 }
 
-function findByIdentity(data, platform, platformUserId) {
-  const id = String(platformUserId);
-  for (const [personId, person] of Object.entries(data.persons)) {
-    if (person.identities && String(person.identities[platform]) === id) {
-      return { personId, person };
-    }
-  }
-  return null;
+function nextSeq(db) {
+  const row = db.prepare(`SELECT value FROM meta WHERE key = 'persons_seq'`).get();
+  const seq = (row ? parseInt(row.value, 10) : 0) + 1;
+  db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('persons_seq', ?)`).run(String(seq));
+  return seq;
 }
 
 /**
@@ -60,57 +37,61 @@ function findByIdentity(data, platform, platformUserId) {
  * Возвращает { id, isNew, ...person }.
  */
 export function resolvePerson({ platform, platformUserId, displayName = '', username = null }) {
-  const data = load();
-  const existing = findByIdentity(data, platform, platformUserId);
+  const db = getDb();
+  const id = String(platformUserId);
 
-  if (existing) {
-    const { personId, person } = existing;
+  const link = db.prepare(
+    'SELECT person_id FROM person_identities WHERE platform = ? AND platform_user_id = ?'
+  ).get(platform, id);
+
+  if (link) {
+    const person = rowToPerson(db.prepare('SELECT id, data FROM persons WHERE id = ?').get(link.person_id));
     person.last_seen = new Date().toISOString();
     if (displayName) person.display_name = displayName;
     if (username) person.username = username;
-    save(data);
-    return { id: personId, isNew: false, ...person };
+    savePerson(db, person.id, person);
+    return { ...person, isNew: false };
   }
 
-  data.seq += 1;
-  const personId = `person-${String(data.seq).padStart(4, '0')}`;
-  const person = {
-    identities: { [platform]: String(platformUserId) },
-    display_name: displayName,
-    username,
-    policy: 'auto',
-    created_at: new Date().toISOString(),
-    last_seen: new Date().toISOString()
-  };
-  data.persons[personId] = person;
-  save(data);
-  return { id: personId, isNew: true, ...person };
+  const tx = db.transaction(() => {
+    const personId = `person-${String(nextSeq(db)).padStart(4, '0')}`;
+    const person = {
+      identities: { [platform]: id },
+      display_name: displayName,
+      username,
+      policy: 'auto',
+      created_at: new Date().toISOString(),
+      last_seen: new Date().toISOString()
+    };
+    savePerson(db, personId, person);
+    db.prepare('INSERT INTO person_identities (platform, platform_user_id, person_id) VALUES (?, ?, ?)')
+      .run(platform, id, personId);
+    return { id: personId, isNew: true, ...person };
+  });
+  return tx();
 }
 
 export function getPerson(personId) {
-  const data = load();
-  const person = data.persons[personId];
-  return person ? { id: personId, ...person } : null;
+  const row = getDb().prepare('SELECT id, data FROM persons WHERE id = ?').get(personId);
+  return row ? rowToPerson(row) : null;
 }
 
 export function getPersons() {
-  const data = load();
-  return Object.fromEntries(
-    Object.entries(data.persons).map(([id, p]) => [id, { id, ...p }])
-  );
+  const rows = getDb().prepare('SELECT id, data FROM persons').all();
+  return Object.fromEntries(rows.map(r => [r.id, rowToPerson(r)]));
 }
 
 export function setPersonPolicy(personId, policy) {
   if (!POLICIES.includes(policy)) {
     return { ok: false, error: `policy must be one of: ${POLICIES.join(', ')}` };
   }
-  const data = load();
-  if (!data.persons[personId]) {
+  const person = getPerson(personId);
+  if (!person) {
     return { ok: false, error: `person not found: ${personId}` };
   }
-  data.persons[personId].policy = policy;
-  save(data);
-  return { ok: true, person: { id: personId, ...data.persons[personId] } };
+  person.policy = policy;
+  savePerson(getDb(), personId, person);
+  return { ok: true, person: { ...person, id: personId } };
 }
 
 /**
@@ -119,20 +100,19 @@ export function setPersonPolicy(personId, policy) {
  * Только подсказка владельцу — само слияние всегда явное (mergePersons).
  */
 export function findSimilarPersons(person) {
-  const data = load();
   const username = (person.username || '').toLowerCase();
   const displayName = (person.display_name || '').trim().toLowerCase();
   const platforms = Object.keys(person.identities || {});
   const result = [];
 
-  for (const [id, p] of Object.entries(data.persons)) {
+  for (const [id, p] of Object.entries(getPersons())) {
     if (id === person.id) continue;
     // уже есть identity на той же платформе — это другой человек, не предлагать
     if (platforms.some(pl => p.identities?.[pl])) continue;
     const sameUsername = username && (p.username || '').toLowerCase() === username;
     const sameName = displayName && (p.display_name || '').trim().toLowerCase() === displayName;
     if (sameUsername || sameName) {
-      result.push({ id, ...p, match: sameUsername ? 'username' : 'name' });
+      result.push({ ...p, id, match: sameUsername ? 'username' : 'name' });
     }
   }
   return result;
@@ -144,9 +124,9 @@ export function findSimilarPersons(person) {
  * склейка запрещена дизайном.
  */
 export function mergePersons(targetId, sourceId) {
-  const data = load();
-  const target = data.persons[targetId];
-  const source = data.persons[sourceId];
+  const db = getDb();
+  const target = getPerson(targetId);
+  const source = getPerson(sourceId);
   if (!target || !source) {
     return { ok: false, error: 'person not found' };
   }
@@ -154,9 +134,17 @@ export function mergePersons(targetId, sourceId) {
     if (target.identities[platform] && target.identities[platform] !== pid) {
       return { ok: false, error: `identity conflict on platform "${platform}"` };
     }
-    target.identities[platform] = pid;
   }
-  delete data.persons[sourceId];
-  save(data);
-  return { ok: true, person: { id: targetId, ...target } };
+
+  const tx = db.transaction(() => {
+    for (const [platform, pid] of Object.entries(source.identities || {})) {
+      target.identities[platform] = pid;
+      db.prepare('UPDATE person_identities SET person_id = ? WHERE platform = ? AND platform_user_id = ?')
+        .run(targetId, platform, String(pid));
+    }
+    savePerson(db, targetId, target);
+    db.prepare('DELETE FROM persons WHERE id = ?').run(sourceId);
+    return { ok: true, person: { ...target, id: targetId } };
+  });
+  return tx();
 }
