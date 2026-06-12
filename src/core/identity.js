@@ -114,6 +114,31 @@ export function setPersonPolicy(personId, policy) {
 }
 
 /**
+ * Кандидаты на склейку с person: совпадение username или непустого
+ * display_name у персоны БЕЗ identity на этой платформе.
+ * Только подсказка владельцу — само слияние всегда явное (mergePersons).
+ */
+export function findSimilarPersons(person) {
+  const data = load();
+  const username = (person.username || '').toLowerCase();
+  const displayName = (person.display_name || '').trim().toLowerCase();
+  const platforms = Object.keys(person.identities || {});
+  const result = [];
+
+  for (const [id, p] of Object.entries(data.persons)) {
+    if (id === person.id) continue;
+    // уже есть identity на той же платформе — это другой человек, не предлагать
+    if (platforms.some(pl => p.identities?.[pl])) continue;
+    const sameUsername = username && (p.username || '').toLowerCase() === username;
+    const sameName = displayName && (p.display_name || '').trim().toLowerCase() === displayName;
+    if (sameUsername || sameName) {
+      result.push({ id, ...p, match: sameUsername ? 'username' : 'name' });
+    }
+  }
+  return result;
+}
+
+/**
  * Слить две персоны (identities переносятся в target, source удаляется).
  * Вызывается ТОЛЬКО по явному подтверждению владельца — автоматическая
  * склейка запрещена дизайном.

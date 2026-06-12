@@ -19,7 +19,7 @@
 
 import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo } from '../../forward.js';
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
-import { setPersonPolicy, POLICIES } from '../../core/identity.js';
+import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
@@ -115,6 +115,13 @@ export async function handleCallback(data, actions) {
       await notifyOwnerText('✍️ Напиши, что поправить («короче», «без эмодзи», «предложи звонок»…) — перегенерирую.');
       return 'Жду комментарий';
     }
+  }
+
+  // Склейка персон между платформами — только по этому явному подтверждению (#10)
+  if (ns === 'merge') {
+    if (op === 'no') return 'Ок, оставляю разными людьми';
+    const result = mergePersons(op, arg);
+    return result.ok ? '🔗 Память объединена' : `⚠️ ${result.error}`;
   }
 
   if (ns === 'pol' && POLICIES.includes(op)) {

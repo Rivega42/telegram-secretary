@@ -45,6 +45,8 @@ import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
 import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
+import { vkCallbackHandler } from './connectors/vk/callback.js';
+import { sendVkMessage } from './connectors/vk/api.js';
 import {
   setExecuteCallback,
   createPending,
@@ -242,6 +244,16 @@ export function createControlActions() {
         logOutgoing(draftKey, draft.text, true);
         deleteDraft(draftKey);
         return '📤 Опубликовано';
+      }
+
+      // Личное сообщение сообществу ВКонтакте
+      if (draft.kind === 'vk') {
+        const result = await sendVkMessage(draft.peer_id, draft.text);
+        if (!result.ok) return `⚠️ ${result.error}`;
+        appendConversationHistory(draft.thread_id, 'vika', draft.text);
+        logOutgoing(draftKey, draft.text, true);
+        deleteDraft(draftKey);
+        return '📤 Отправлено (VK)';
       }
 
       // Пост в канал (автопостинг)
@@ -553,6 +565,12 @@ export function createApp() {
    * API: ручной ответ клиенту
    * POST /api/reply { mapping_id, text }
    */
+  /**
+   * ВКонтакте: Callback API сообщества (этап 4).
+   * 503, пока не заданы VK_GROUP_TOKEN и VK_CONFIRMATION_CODE.
+   */
+  app.post('/vk/callback', vkCallbackHandler);
+
   app.post('/api/reply', async (req, res) => {
     const { mapping_id, text } = req.body;
 
