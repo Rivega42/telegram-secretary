@@ -53,13 +53,13 @@
 1. [x] **ВКонтакте**: ЛС сообществу через Callback API, единая память,
        подсказка склейки персон (#21, #10); комментарии на стене — позже
 2. **WhatsApp** — Business Cloud API (платные диалоги, окно 24 ч) — #22
-3. **Instagram** — Meta Graph API (app review, только Business/Creator) — #23
+3. **Instagram** — исследование готово: [docs/instagram-research.md](./docs/instagram-research.md); коннектор — после WhatsApp — #23
 
 ## Этап 5 — Надёжность и качество
 
-- [x] Тесты (node:test, 56 шт., без новых зависимостей) + Docker-smoke в CI — #24 (база)
+- [x] Тесты (node:test, 71 шт.) + Docker-smoke в CI — #24
 - [x] Ротация/TTL логов (`LOG_TTL_DAYS`, по умолчанию 30 дней) — #25
-- SQLite (`better-sqlite3`) вместо JSON-файлов — #26
+- [x] SQLite (`better-sqlite3`) вместо JSON-файлов: `secretary.db`, авто-миграция — #26
 - [x] Не-текстовые сообщения: фото — эскалация; голос — Whisper-транскрипция
       через `STT_BASE_URL` (опционально, fallback — эскалация) — #27
 - [x] Реалистичность: «печатает…» + отметка прочитанности (`TYPING_SIMULATION`) — #28
