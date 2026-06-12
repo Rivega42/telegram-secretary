@@ -53,7 +53,7 @@
 1. [x] **ВКонтакте**: ЛС сообществу через Callback API, единая память,
        подсказка склейки персон (#21, #10); комментарии на стене — позже
 2. **WhatsApp** — Business Cloud API (платные диалоги, окно 24 ч) — #22
-3. **Instagram** — Meta Graph API (app review, только Business/Creator) — #23
+3. **Instagram** — исследование готово: [docs/instagram-research.md](./docs/instagram-research.md); коннектор — после WhatsApp — #23
 
 ## Этап 5 — Надёжность и качество
 
