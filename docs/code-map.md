@@ -81,6 +81,7 @@ flowchart TB
 | `stats.js` | Агрегаты для дайджеста/метрик из `history`/`persons` | `computeStats({sinceMs})`, `platformOf()` |
 | `feedback.js` | Петля качества: правки (few-shot) и оценки 👍/👎 | `recordCorrection()`, `recordRating()`, `recentCorrections()`, `feedbackStats()` |
 | `leads.js` | Лиды со статусами + выгрузка в CRM | `recordLead()`, `setLeadStatus()`, `listLeads()`, `leadsStats()`, `exportLeadToCrm()` |
+| `tenant.js` | Реестр арендаторов (SaaS): резолв канала → арендатор | `createTenant()`, `resolveTenant()`, `registerChannel()`, `seedDefaultTenant()` |
 | `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |
 | `format.js` | Мелкие форматтеры + timing-safe сравнение секретов | `truncate()`, `usernameDisplay()`, `timingSafeEqualStr()` |
 

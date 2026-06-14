@@ -47,6 +47,7 @@ import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js
 import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
+import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels } from './core/tenant.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -68,6 +69,7 @@ const HISTORY_CONTEXT_LIMIT = parseInt(process.env.HISTORY_CONTEXT_LIMIT || '25'
 export const OWNER_CHAT_ID = String(process.env.OWNER_CHAT_ID || '');
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
 /**
  * Восстановить конверт из pending-задачи. Старые pending.json (до этапа 1)
@@ -365,14 +367,21 @@ export function createApp() {
     next();
   });
 
-  // Авторизация админ-API: X-Api-Key или Authorization: Bearer (timing-safe)
-  app.use('/api', (req, res, next) => {
-    if (!API_KEY) return next(); // не настроен — предупреждение выводится при старте
+  // Авторизация API (timing-safe). /api/admin/* — отдельный ADMIN_API_KEY (суперадмин
+  // арендаторов); прочие /api/* — пользовательский API_KEY.
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/api/')) return next();
     const provided = req.headers['x-api-key']
       || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!timingSafeEqualStr(provided, API_KEY)) {
-      return res.status(401).json({ error: 'Unauthorized' });
+
+    if (req.path.startsWith('/api/admin')) {
+      if (!ADMIN_API_KEY) return res.status(503).json({ error: 'Admin API disabled (set ADMIN_API_KEY)' });
+      if (!timingSafeEqualStr(provided, ADMIN_API_KEY)) return res.status(401).json({ error: 'Unauthorized' });
+      return next();
     }
+
+    if (!API_KEY) return next(); // не настроен — предупреждение при старте
+    if (!timingSafeEqualStr(provided, API_KEY)) return res.status(401).json({ error: 'Unauthorized' });
     next();
   });
 
@@ -651,6 +660,47 @@ export function createApp() {
    */
   app.get('/api/mode', (req, res) => {
     res.json(getSettings());
+  });
+
+  /**
+   * Админ-API арендаторов (SaaS, фаза S1) — отдельный ADMIN_API_KEY.
+   */
+  app.get('/api/admin/tenants', (req, res) => {
+    const tenants = listTenants().map(t => ({ ...t, channels: listChannels(t.id) }));
+    res.json({ count: tenants.length, tenants });
+  });
+
+  app.post('/api/admin/tenants', (req, res) => {
+    const { id, name, owner_chat_id, plan } = req.body || {};
+    const result = createTenant({ id, name, ownerChatId: owner_chat_id, plan });
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
+  });
+
+  app.get('/api/admin/tenants/:id', (req, res) => {
+    const tenant = getTenant(req.params.id);
+    if (!tenant) return res.status(404).json({ error: 'tenant not found' });
+    res.json({ ...tenant, channels: listChannels(tenant.id) });
+  });
+
+  app.post('/api/admin/tenants/:id/status', (req, res) => {
+    const result = setTenantStatus(req.params.id, (req.body || {}).status);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  app.post('/api/admin/tenants/:id/plan', (req, res) => {
+    const result = setTenantPlan(req.params.id, (req.body || {}).plan);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  app.post('/api/admin/tenants/:id/channels', (req, res) => {
+    const { channel_key } = req.body || {};
+    if (!channel_key) return res.status(400).json({ error: 'channel_key required' });
+    const result = registerChannel(channel_key, req.params.id);
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
   });
 
   /**

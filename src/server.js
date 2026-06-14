@@ -14,6 +14,7 @@ import { startDigestSchedule } from './connectors/telegram/digest.js';
 import { getSettings } from './core/modes.js';
 import { rotateLogs, pruneProcessed } from './state.js';
 import { closeDb } from './core/db.js';
+import { seedDefaultTenant } from './core/tenant.js';
 
 const PORT = process.env.PORT || 18792;
 
@@ -51,6 +52,9 @@ function validateEnv() {
 validateEnv();
 
 const app = createApp();
+
+// SaaS: арендатор default из env (текущий одно-владельческий режим). Аддитивно, фаза S1.
+seedDefaultTenant();
 
 // Восстановить отложенные ответы, пережившие рестарт
 loadPendingFromFile();

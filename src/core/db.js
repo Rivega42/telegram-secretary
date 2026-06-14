@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS leads (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads (status);
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  owner_chat_id TEXT,
+  plan TEXT NOT NULL DEFAULT 'free',
+  status TEXT NOT NULL DEFAULT 'active',  -- active | suspended
+  data TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tenant_channels (
+  channel_key TEXT PRIMARY KEY,           -- tg:<bot_id> | vk:<group_id> | wa:<phone_number_id>
+  tenant_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_channels_tenant ON tenant_channels (tenant_id);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
