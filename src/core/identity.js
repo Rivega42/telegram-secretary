@@ -12,6 +12,7 @@
  */
 
 import { getDb } from './db.js';
+import { currentTenantId } from './context.js';
 
 export const POLICIES = ['auto', 'escalate', 'ignore'];
 
@@ -21,8 +22,8 @@ function rowToPerson(row) {
 
 function savePerson(db, id, person) {
   const { id: _omit, isNew: _omit2, ...data } = person;
-  db.prepare('INSERT OR REPLACE INTO persons (id, data) VALUES (?, ?)')
-    .run(id, JSON.stringify(data));
+  db.prepare('INSERT OR REPLACE INTO persons (id, tenant_id, data) VALUES (?, ?, ?)')
+    .run(id, currentTenantId(), JSON.stringify(data));
 }
 
 function nextSeq(db) {
@@ -38,14 +39,15 @@ function nextSeq(db) {
  */
 export function resolvePerson({ platform, platformUserId, displayName = '', username = null }) {
   const db = getDb();
+  const tenant = currentTenantId();
   const id = String(platformUserId);
 
   const link = db.prepare(
-    'SELECT person_id FROM person_identities WHERE platform = ? AND platform_user_id = ?'
-  ).get(platform, id);
+    'SELECT person_id FROM person_identities WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?'
+  ).get(tenant, platform, id);
 
   if (link) {
-    const person = rowToPerson(db.prepare('SELECT id, data FROM persons WHERE id = ?').get(link.person_id));
+    const person = rowToPerson(db.prepare('SELECT id, data FROM persons WHERE tenant_id = ? AND id = ?').get(tenant, link.person_id));
     person.last_seen = new Date().toISOString();
     if (displayName) person.display_name = displayName;
     if (username) person.username = username;
@@ -64,20 +66,20 @@ export function resolvePerson({ platform, platformUserId, displayName = '', user
       last_seen: new Date().toISOString()
     };
     savePerson(db, personId, person);
-    db.prepare('INSERT INTO person_identities (platform, platform_user_id, person_id) VALUES (?, ?, ?)')
-      .run(platform, id, personId);
+    db.prepare('INSERT INTO person_identities (tenant_id, platform, platform_user_id, person_id) VALUES (?, ?, ?, ?)')
+      .run(tenant, platform, id, personId);
     return { id: personId, isNew: true, ...person };
   });
   return tx();
 }
 
 export function getPerson(personId) {
-  const row = getDb().prepare('SELECT id, data FROM persons WHERE id = ?').get(personId);
+  const row = getDb().prepare('SELECT id, data FROM persons WHERE tenant_id = ? AND id = ?').get(currentTenantId(), personId);
   return row ? rowToPerson(row) : null;
 }
 
 export function getPersons() {
-  const rows = getDb().prepare('SELECT id, data FROM persons').all();
+  const rows = getDb().prepare('SELECT id, data FROM persons WHERE tenant_id = ?').all(currentTenantId());
   return Object.fromEntries(rows.map(r => [r.id, rowToPerson(r)]));
 }
 
@@ -139,11 +141,11 @@ export function mergePersons(targetId, sourceId) {
   const tx = db.transaction(() => {
     for (const [platform, pid] of Object.entries(source.identities || {})) {
       target.identities[platform] = pid;
-      db.prepare('UPDATE person_identities SET person_id = ? WHERE platform = ? AND platform_user_id = ?')
-        .run(targetId, platform, String(pid));
+      db.prepare('UPDATE person_identities SET person_id = ? WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?')
+        .run(targetId, currentTenantId(), platform, String(pid));
     }
     savePerson(db, targetId, target);
-    db.prepare('DELETE FROM persons WHERE id = ?').run(sourceId);
+    db.prepare('DELETE FROM persons WHERE tenant_id = ? AND id = ?').run(currentTenantId(), sourceId);
     return { ok: true, person: { ...target, id: targetId } };
   });
   return tx();

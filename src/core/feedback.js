@@ -8,6 +8,7 @@
  */
 
 import { getDb } from './db.js';
+import { currentTenantId } from './context.js';
 
 const FEWSHOT_LIMIT = parseInt(process.env.FEEDBACK_FEWSHOT_LIMIT || '2', 10);
 const FEWSHOT_ENABLED = process.env.FEEDBACK_FEWSHOT !== 'false';
@@ -17,9 +18,9 @@ const FEWSHOT_ENABLED = process.env.FEEDBACK_FEWSHOT !== 'false';
  */
 export function recordCorrection({ surface = 'dm', personId = null, original = '', note = '', corrected = '' }) {
   getDb().prepare(
-    `INSERT INTO feedback (ts, kind, surface, person_id, original, note, corrected)
-     VALUES (?, 'correction', ?, ?, ?, ?, ?)`
-  ).run(new Date().toISOString(), surface, personId, original, note, corrected);
+    `INSERT INTO feedback (tenant_id, ts, kind, surface, person_id, original, note, corrected)
+     VALUES (?, ?, 'correction', ?, ?, ?, ?, ?)`
+  ).run(currentTenantId(), new Date().toISOString(), surface, personId, original, note, corrected);
 }
 
 /**
@@ -27,9 +28,9 @@ export function recordCorrection({ surface = 'dm', personId = null, original = '
  */
 export function recordRating({ surface = 'dm', personId = null, original = '', rating }) {
   getDb().prepare(
-    `INSERT INTO feedback (ts, kind, surface, person_id, original, rating)
-     VALUES (?, 'rating', ?, ?, ?, ?)`
-  ).run(new Date().toISOString(), surface, personId, original, rating > 0 ? 1 : -1);
+    `INSERT INTO feedback (tenant_id, ts, kind, surface, person_id, original, rating)
+     VALUES (?, ?, 'rating', ?, ?, ?, ?)`
+  ).run(currentTenantId(), new Date().toISOString(), surface, personId, original, rating > 0 ? 1 : -1);
 }
 
 /**
@@ -39,9 +40,9 @@ export function recentCorrections(surface = 'dm', limit = FEWSHOT_LIMIT) {
   if (!FEWSHOT_ENABLED || limit <= 0) return [];
   return getDb().prepare(
     `SELECT note, corrected FROM feedback
-     WHERE kind = 'correction' AND surface = ? AND corrected <> ''
+     WHERE tenant_id = ? AND kind = 'correction' AND surface = ? AND corrected <> ''
      ORDER BY id DESC LIMIT ?`
-  ).all(surface, limit).reverse();
+  ).all(currentTenantId(), surface, limit).reverse();
 }
 
 /**
@@ -50,8 +51,8 @@ export function recentCorrections(surface = 'dm', limit = FEWSHOT_LIMIT) {
 export function feedbackStats(sinceMs = 24 * 60 * 60 * 1000) {
   const cutoff = new Date(Date.now() - sinceMs).toISOString();
   const rows = getDb().prepare(
-    `SELECT kind, rating FROM feedback WHERE ts >= ?`
-  ).all(cutoff);
+    `SELECT kind, rating FROM feedback WHERE tenant_id = ? AND ts >= ?`
+  ).all(currentTenantId(), cutoff);
   let corrections = 0, likes = 0, dislikes = 0;
   for (const r of rows) {
     if (r.kind === 'correction') corrections++;

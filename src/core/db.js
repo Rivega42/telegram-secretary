@@ -24,44 +24,58 @@ function stateDir() {
   return process.env.STATE_DIR || './state';
 }
 
+// tenant_id присутствует во всех таблицах данных (SaaS, фаза S2). Там, где
+// внешний id может повторяться между арендаторами (telegram user id, chat id,
+// platform_user_id, person_id) — он входит в составной первичный ключ. `processed` —
+// глобальная (ключи дедупа включают бот/группу), `tenants`/`tenant_channels`/`meta` — инфра.
+//
+// SCHEMA — только таблицы (и индексы без tenant_id). Индексы по tenant_id создаются
+// в INDEXES ПОСЛЕ migrateTenantId, иначе на апгрейде старой БД (где колонки ещё нет)
+// CREATE INDEX упадёт.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS connections (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   data TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS contacts (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
 );
 CREATE TABLE IF NOT EXISTS conversations (
   mapping_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   business_connection_id TEXT,
   business_chat_id TEXT,
   data TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_conversations_chat
-  ON conversations (business_connection_id, business_chat_id);
 CREATE TABLE IF NOT EXISTS history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   thread_id TEXT NOT NULL,
   ts TEXT NOT NULL,
   role TEXT NOT NULL,
   text TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_history_thread ON history (thread_id, id);
 CREATE TABLE IF NOT EXISTS persons (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   data TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS person_identities (
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   platform TEXT NOT NULL,
   platform_user_id TEXT NOT NULL,
   person_id TEXT NOT NULL,
-  PRIMARY KEY (platform, platform_user_id)
+  PRIMARY KEY (tenant_id, platform, platform_user_id)
 );
 CREATE TABLE IF NOT EXISTS pending (
-  chat_id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  chat_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, chat_id)
 );
 CREATE TABLE IF NOT EXISTS processed (
   key TEXT PRIMARY KEY,
@@ -70,6 +84,7 @@ CREATE TABLE IF NOT EXISTS processed (
 CREATE INDEX IF NOT EXISTS idx_processed_ts ON processed (ts);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   ts TEXT NOT NULL,
   kind TEXT NOT NULL,          -- 'correction' | 'rating'
   surface TEXT,
@@ -79,18 +94,18 @@ CREATE TABLE IF NOT EXISTS feedback (
   corrected TEXT,              -- итоговый текст после правки
   rating INTEGER               -- +1 / -1 для лайк/дизлайк
 );
-CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (ts);
 CREATE TABLE IF NOT EXISTS leads (
-  person_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  person_id TEXT NOT NULL,
   platform TEXT,
   source TEXT,              -- deep-link метка поста и т.п.
   display_name TEXT,
   first_message TEXT,
   status TEXT NOT NULL,     -- new | working | won | lost
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, person_id)
 );
-CREATE INDEX IF NOT EXISTS idx_leads_status ON leads (status);
 CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY,
   name TEXT,
@@ -111,6 +126,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `;
 
+// Индексы по tenant_id — после миграции (колонки уже гарантированно есть)
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_conversations_chat ON conversations (tenant_id, business_connection_id, business_chat_id);
+CREATE INDEX IF NOT EXISTS idx_history_thread ON history (tenant_id, thread_id, id);
+CREATE INDEX IF NOT EXISTS idx_persons_tenant ON persons (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (tenant_id, ts);
+CREATE INDEX IF NOT EXISTS idx_leads_status ON leads (tenant_id, status);
+`;
+
 export function getDb() {
   if (db) return db;
 
@@ -122,8 +146,79 @@ export function getDb() {
   db.pragma('busy_timeout = 5000'); // ждать до 5с при конкурентной блокировке вместо ошибки
   db.pragma('synchronous = NORMAL'); // безопасно в WAL, заметно быстрее
   db.exec(SCHEMA);
+  migrateTenantId(db);
+  db.exec(INDEXES);
   migrateFromJson(db, dir);
   return db;
+}
+
+function hasColumn(db, table, col) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === col);
+}
+
+/**
+ * Апгрейд БД до-S2 (без tenant_id) до мультиарендной схемы. Существующие
+ * строки получают tenant_id='default' — данные не теряются (инвариант CLAUDE.md).
+ * Идемпотентно: при наличии tenant_id ничего не делает (свежая БД создаётся уже
+ * по новой схеме).
+ */
+function migrateTenantId(db) {
+  // Таблицы, где достаточно добавить колонку (PK не меняется)
+  for (const t of ['connections', 'conversations', 'history', 'persons', 'feedback']) {
+    if (!hasColumn(db, t, 'tenant_id')) {
+      db.exec(`ALTER TABLE ${t} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+  }
+  // Таблицы, где tenant_id входит в составной PK → пересоздание с переносом данных
+  if (!hasColumn(db, 'contacts', 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE contacts RENAME TO contacts_old;
+      CREATE TABLE contacts (
+        tenant_id TEXT NOT NULL DEFAULT 'default', id TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, id)
+      );
+      INSERT INTO contacts (tenant_id, id, data) SELECT 'default', id, data FROM contacts_old;
+      DROP TABLE contacts_old;
+    `);
+  }
+  if (!hasColumn(db, 'person_identities', 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE person_identities RENAME TO person_identities_old;
+      CREATE TABLE person_identities (
+        tenant_id TEXT NOT NULL DEFAULT 'default', platform TEXT NOT NULL,
+        platform_user_id TEXT NOT NULL, person_id TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, platform, platform_user_id)
+      );
+      INSERT INTO person_identities (tenant_id, platform, platform_user_id, person_id)
+        SELECT 'default', platform, platform_user_id, person_id FROM person_identities_old;
+      DROP TABLE person_identities_old;
+    `);
+  }
+  if (!hasColumn(db, 'pending', 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE pending RENAME TO pending_old;
+      CREATE TABLE pending (
+        tenant_id TEXT NOT NULL DEFAULT 'default', chat_id TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, chat_id)
+      );
+      INSERT INTO pending (tenant_id, chat_id, data) SELECT 'default', chat_id, data FROM pending_old;
+      DROP TABLE pending_old;
+    `);
+  }
+  if (!hasColumn(db, 'leads', 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE leads RENAME TO leads_old;
+      CREATE TABLE leads (
+        tenant_id TEXT NOT NULL DEFAULT 'default', person_id TEXT NOT NULL,
+        platform TEXT, source TEXT, display_name TEXT, first_message TEXT,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, person_id)
+      );
+      INSERT INTO leads (tenant_id, person_id, platform, source, display_name, first_message, status, created_at, updated_at)
+        SELECT 'default', person_id, platform, source, display_name, first_message, status, created_at, updated_at FROM leads_old;
+      DROP TABLE leads_old;
+    `);
+  }
 }
 
 /** Для тестов: закрыть и забыть соединение (следующий getDb переоткроет). */

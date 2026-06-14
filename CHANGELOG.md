@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+### Изменено (SaaS, фаза S2 — изоляция данных по арендаторам)
+- **`tenant_id` во всех таблицах данных** (connections, contacts, conversations,
+  history, persons, person_identities, pending, feedback, leads); там, где внешний id
+  может повторяться между арендаторами (user id, chat id, platform_user_id, person_id) —
+  он в составном PK. `processed` остаётся глобальной
+- **Контекст арендатора** `core/context.js` (AsyncLocalStorage): слой данных
+  (`state.js`/`identity.js`/`leads.js`/`feedback.js`/`stats.js`/`scheduler.js`) сам
+  подставляет фильтр по `tenant_id` — изоляцию гарантирует слой, а не вызывающий код
+- Резолв арендатора в вебхуках: TG → `default`, VK → `vk:<group_id>`, WA →
+  `wa:<phone_number_id>`; scheduler хранит `tenantId` и исполняет ответ в контексте
+- **Миграция до-S2 БД**: `tenant_id` добавляется ко всем таблицам (составные PK —
+  пересозданием), существующие строки → `default`, данные не теряются
+- Single-tenant работает без изменений (всё по умолчанию в `default`)
+- Тесты: +10 (изоляция персон/истории/лидов/контактов/маппингов между арендаторами,
+  миграция старой БД) — всего 113
+
+
 ### Добавлено (SaaS, фаза S1 — реестр арендаторов)
 - **Мультиарендность, фундамент** (`core/tenant.js`, таблицы `tenants`/`tenant_channels`):
   реестр арендаторов, резолв «ключ канала → арендатор», admin-API под отдельным

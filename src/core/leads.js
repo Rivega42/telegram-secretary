@@ -8,6 +8,7 @@
  */
 
 import { getDb } from './db.js';
+import { currentTenantId } from './context.js';
 
 export const LEAD_STATUSES = ['new', 'working', 'won', 'lost'];
 
@@ -17,17 +18,18 @@ export const LEAD_STATUSES = ['new', 'working', 'won', 'lost'];
  */
 export function recordLead({ personId, platform = 'telegram', source = null, displayName = '', firstMessage = '' }) {
   const db = getDb();
-  const existing = db.prepare('SELECT * FROM leads WHERE person_id = ?').get(personId);
+  const tenant = currentTenantId();
+  const existing = db.prepare('SELECT * FROM leads WHERE tenant_id = ? AND person_id = ?').get(tenant, personId);
   if (existing) return { lead: existing, isNew: false };
 
   const now = new Date().toISOString();
   const lead = {
-    person_id: personId, platform, source, display_name: displayName,
+    person_id: personId, tenant_id: tenant, platform, source, display_name: displayName,
     first_message: firstMessage, status: 'new', created_at: now, updated_at: now
   };
   db.prepare(
-    `INSERT INTO leads (person_id, platform, source, display_name, first_message, status, created_at, updated_at)
-     VALUES (@person_id, @platform, @source, @display_name, @first_message, @status, @created_at, @updated_at)`
+    `INSERT INTO leads (person_id, tenant_id, platform, source, display_name, first_message, status, created_at, updated_at)
+     VALUES (@person_id, @tenant_id, @platform, @source, @display_name, @first_message, @status, @created_at, @updated_at)`
   ).run(lead);
   return { lead, isNew: true };
 }
@@ -37,25 +39,28 @@ export function setLeadStatus(personId, status) {
     return { ok: false, error: `status must be one of: ${LEAD_STATUSES.join(', ')}` };
   }
   const db = getDb();
-  const info = db.prepare('UPDATE leads SET status = ?, updated_at = ? WHERE person_id = ?')
-    .run(status, new Date().toISOString(), personId);
+  const tenant = currentTenantId();
+  const info = db.prepare('UPDATE leads SET status = ?, updated_at = ? WHERE tenant_id = ? AND person_id = ?')
+    .run(status, new Date().toISOString(), tenant, personId);
   if (!info.changes) return { ok: false, error: 'lead not found' };
-  return { ok: true, lead: db.prepare('SELECT * FROM leads WHERE person_id = ?').get(personId) };
+  return { ok: true, lead: db.prepare('SELECT * FROM leads WHERE tenant_id = ? AND person_id = ?').get(tenant, personId) };
 }
 
 export function listLeads({ status = null } = {}) {
   const db = getDb();
+  const tenant = currentTenantId();
   return status
-    ? db.prepare('SELECT * FROM leads WHERE status = ? ORDER BY updated_at DESC').all(status)
-    : db.prepare('SELECT * FROM leads ORDER BY updated_at DESC').all();
+    ? db.prepare('SELECT * FROM leads WHERE tenant_id = ? AND status = ? ORDER BY updated_at DESC').all(tenant, status)
+    : db.prepare('SELECT * FROM leads WHERE tenant_id = ? ORDER BY updated_at DESC').all(tenant);
 }
 
 export function leadsStats(sinceMs = 24 * 60 * 60 * 1000) {
   const cutoff = new Date(Date.now() - sinceMs).toISOString();
   const db = getDb();
-  const newCount = db.prepare('SELECT COUNT(*) c FROM leads WHERE created_at >= ?').get(cutoff).c;
+  const tenant = currentTenantId();
+  const newCount = db.prepare('SELECT COUNT(*) c FROM leads WHERE tenant_id = ? AND created_at >= ?').get(tenant, cutoff).c;
   const byStatus = {};
-  for (const r of db.prepare('SELECT status, COUNT(*) c FROM leads GROUP BY status').all()) {
+  for (const r of db.prepare('SELECT status, COUNT(*) c FROM leads WHERE tenant_id = ? GROUP BY status').all(tenant)) {
     byStatus[r.status] = r.c;
   }
   return { new: newCount, by_status: byStatus };

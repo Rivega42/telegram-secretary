@@ -26,6 +26,8 @@ import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate, usernameDisplay, timingSafeEqualStr } from '../../core/format.js';
 import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
+import { runWithTenant } from '../../core/context.js';
+import { resolveTenant } from '../../core/tenant.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendVkMessage, vkApi, isVkConfigured } from './api.js';
 
@@ -190,14 +192,19 @@ export async function vkCallbackHandler(req, res) {
   // Персистентная дедупликация — переживает рестарт
   if (!markProcessed(eventKey)) return;
 
+  // Резолв арендатора по сообществу (vk:<group_id>); не найден → default
+  const tenantId = resolveTenant(`vk:${event.group_id}`)?.id || 'default';
+
   try {
-    logUpdate({ update_id: eventKey, vk: true, type: event.type });
-    if (event.type === 'message_new') {
-      const message = event.object?.message || event.object;
-      const profile = await fetchProfile(message.from_id);
-      const result = await handleVkMessage(message, profile);
-      console.log(`[VK] message_new → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
-    }
+    await runWithTenant(tenantId, async () => {
+      logUpdate({ update_id: eventKey, vk: true, type: event.type });
+      if (event.type === 'message_new') {
+        const message = event.object?.message || event.object;
+        const profile = await fetchProfile(message.from_id);
+        const result = await handleVkMessage(message, profile);
+        console.log(`[VK] message_new → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+      }
+    });
   } catch (err) {
     console.error('[VK] Error handling event:', err);
     unmarkProcessed(eventKey); // дать ВК повторить доставку

@@ -21,6 +21,8 @@ import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate } from '../../core/format.js';
 import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
+import { runWithTenant } from '../../core/context.js';
+import { resolveTenant } from '../../core/tenant.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendWaMessage, isWaConfigured } from './api.js';
 
@@ -178,6 +180,9 @@ export async function waWebhookHandler(req, res) {
     for (const entry of req.body?.entry || []) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
+        // Резолв арендатора по бизнес-номеру (wa:<phone_number_id>); не найден → default
+        const phoneId = value.metadata?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+        const tenantId = resolveTenant(`wa:${phoneId}`)?.id || 'default';
         const contacts = Object.fromEntries(
           (value.contacts || []).map(c => [c.wa_id, c.profile?.name || ''])
         );
@@ -187,8 +192,10 @@ export async function waWebhookHandler(req, res) {
           if (!markProcessed(key)) continue;
           logUpdate({ update_id: key, wa: true, type: message.type });
           try {
-            const result = await handleWaMessage(message, contacts[message.from] || '');
-            console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+            await runWithTenant(tenantId, async () => {
+              const result = await handleWaMessage(message, contacts[message.from] || '');
+              console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+            });
           } catch (err) {
             console.error('[WA] Error handling message:', err);
             unmarkProcessed(key); // дать Meta повторить доставку

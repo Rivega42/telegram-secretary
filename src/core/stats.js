@@ -6,6 +6,7 @@
  */
 
 import { getDb } from './db.js';
+import { currentTenantId } from './context.js';
 
 export function platformOf(threadId) {
   const t = String(threadId);
@@ -24,7 +25,8 @@ export function computeStats({ sinceMs = 24 * 60 * 60 * 1000 } = {}) {
   const db = getDb();
   const cutoff = new Date(Date.now() - sinceMs).toISOString();
 
-  const rows = db.prepare('SELECT thread_id, role FROM history WHERE ts >= ?').all(cutoff);
+  const tenant = currentTenantId();
+  const rows = db.prepare('SELECT thread_id, role FROM history WHERE tenant_id = ? AND ts >= ?').all(tenant, cutoff);
   const byRole = { client: 0, vika: 0, owner: 0 };
   const byPlatform = {};
   const threads = new Set();
@@ -38,7 +40,7 @@ export function computeStats({ sinceMs = 24 * 60 * 60 * 1000 } = {}) {
     else if (r.role === 'vika') byPlatform[p].secretary++;
   }
 
-  const persons = db.prepare('SELECT data FROM persons').all().map(x => JSON.parse(x.data));
+  const persons = db.prepare('SELECT data FROM persons WHERE tenant_id = ?').all(tenant).map(x => JSON.parse(x.data));
   const byPolicy = {};
   let newPersons = 0;
   for (const p of persons) {

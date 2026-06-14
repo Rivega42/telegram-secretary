@@ -48,6 +48,7 @@ import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
 import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels } from './core/tenant.js';
+import { runWithTenant } from './core/context.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -442,20 +443,23 @@ export function createApp() {
     logUpdate(update);
 
     try {
-      // Подключение/отключение business-аккаунта
-      if (update.business_connection) {
-        const conn = update.business_connection;
-        console.log(`Business connection: ${conn.id} enabled=${conn.is_enabled}`);
-        saveConnection(conn);
-        return res.json({ ok: true, type: 'business_connection' });
-      }
+      // Один Business-бот на деплой → арендатор default (мульти-TG — фаза S3/S5)
+      return await runWithTenant('default', async () => {
+        // Подключение/отключение business-аккаунта
+        if (update.business_connection) {
+          const conn = update.business_connection;
+          console.log(`Business connection: ${conn.id} enabled=${conn.is_enabled}`);
+          saveConnection(conn);
+          return res.json({ ok: true, type: 'business_connection' });
+        }
 
-      if (update.business_message) {
-        return await handleBusinessMessage(update, res);
-      }
+        if (update.business_message) {
+          return await handleBusinessMessage(update, res);
+        }
 
-      console.log('Unknown update type:', Object.keys(update));
-      return res.json({ ok: true, type: 'unknown' });
+        console.log('Unknown update type:', Object.keys(update));
+        return res.json({ ok: true, type: 'unknown' });
+      });
     } catch (err) {
       console.error('Error processing update:', err);
       // Снимаем пометку дедупликации — Telegram повторит доставку после 500,

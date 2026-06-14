@@ -23,6 +23,7 @@ import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js'
 import { recordRating } from '../../core/feedback.js';
 import { setLeadStatus } from '../../core/leads.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
+import { runWithTenant } from '../../core/context.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
 import { buildDigestText } from './digest.js';
@@ -255,7 +256,8 @@ export function startControlLoop(actions) {
       for (const update of result.result || []) {
         offset = update.update_id + 1;
         try {
-          await handleControlUpdate(update, actions, botInfo);
+          // Один бот уведомлений на деплой → арендатор default (мульти — фаза S5)
+          await runWithTenant('default', () => handleControlUpdate(update, actions, botInfo));
         } catch (err) {
           console.error('[Control] Error handling update:', err);
         }
