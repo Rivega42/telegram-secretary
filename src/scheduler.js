@@ -11,8 +11,13 @@
 
 import { getDb } from './core/db.js';
 
-// In-memory Map: businessChatId → pending task
+// In-memory Map: businessChatId → pending task (ожидают таймера)
 const pendingTasks = new Map();
+
+// Задачи в процессе генерации ответа (между стартом LLM и отправкой).
+// Нужны, чтобы ответ владельца во время генерации мог пометить задачу отменённой
+// и исполнитель НЕ отправил дубль (см. cancelPending + executeBrainResponse).
+const executingTasks = new Map();
 
 // Callback для выполнения ответа (устанавливается из server.js)
 let executeResponseCallback = null;
@@ -160,46 +165,62 @@ export function createPending(mapping, senderInfo, originalText, extra = {}) {
 }
 
 /**
- * Отменить pending task (Роман ответил сам)
+ * Отменить pending task (владелец ответил сам).
+ * Если задача уже выполняется (идёт генерация ответа) — помечаем её отменённой,
+ * чтобы исполнитель не отправил дубль поверх ответа владельца.
  */
 export function cancelPending(chatId, reason = 'owner replied') {
   const chatIdStr = String(chatId);
   const task = pendingTasks.get(chatIdStr);
-  
-  if (!task) {
-    return false;
+
+  if (task) {
+    clearTimeout(task.timeoutHandle);
+    pendingTasks.delete(chatIdStr);
+    savePendingToFile();
+    console.log(`[Scheduler] Cancelled pending for chat ${chatIdStr}: ${reason}`);
+    return true;
   }
-  
-  clearTimeout(task.timeoutHandle);
-  pendingTasks.delete(chatIdStr);
-  savePendingToFile();
-  
-  console.log(`[Scheduler] Cancelled pending for chat ${chatIdStr}: ${reason}`);
-  
-  return true;
+
+  // Задача уже в процессе генерации — помечаем, исполнитель прервёт отправку
+  const executing = executingTasks.get(chatIdStr);
+  if (executing) {
+    executing.cancelled = true;
+    console.log(`[Scheduler] Cancelled in-flight task for chat ${chatIdStr}: ${reason}`);
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * Выполнить pending task (таймаут истёк)
+ * Выполнить pending task (таймаут истёк).
+ * Переносим из очереди в executingTasks на время генерации, чтобы cancelPending
+ * мог пометить задачу отменённой во время длинного вызова LLM.
  */
 async function executePending(chatId) {
   const chatIdStr = String(chatId);
   const task = pendingTasks.get(chatIdStr);
-  
+
   if (!task) {
     console.log(`[Scheduler] No pending found for chat ${chatIdStr} (already cancelled?)`);
     return;
   }
-  
+
   pendingTasks.delete(chatIdStr);
+  task.cancelled = false;
+  executingTasks.set(chatIdStr, task);
   savePendingToFile();
-  
+
   console.log(`[Scheduler] Executing pending for chat ${chatIdStr} (mapping ${task.mappingId})`);
-  
-  if (executeResponseCallback) {
-    await executeResponseCallback(task);
-  } else {
-    console.error('[Scheduler] No execute callback set!');
+
+  try {
+    if (executeResponseCallback) {
+      await executeResponseCallback(task);
+    } else {
+      console.error('[Scheduler] No execute callback set!');
+    }
+  } finally {
+    executingTasks.delete(chatIdStr);
   }
 }
 

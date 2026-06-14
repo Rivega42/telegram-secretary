@@ -19,9 +19,7 @@ if (!fs.existsSync(STATE_DIR)) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
 }
 
-// Кеш для отслеживания дублей по update_id
-const processedUpdates = new Set();
-const MAX_PROCESSED_CACHE = 10000;
+const PROCESSED_TTL_MS = parseInt(process.env.PROCESSED_TTL_MS || String(24 * 60 * 60 * 1000), 10);
 
 /**
  * Записать строку в JSONL лог
@@ -34,26 +32,36 @@ function appendLog(entry) {
 }
 
 /**
- * Проверить и пометить update_id как обработанный (дедупликация)
+ * Проверить и пометить событие обработанным (дедупликация). Персистентно в SQLite —
+ * переживает рестарт, поэтому повторная доставка вебхука после деплоя не вызовет
+ * дубль ответа. key — строка с префиксом платформы (tg:/vk:/wa:).
+ * Возвращает true, если событие новое; false — если уже обработано.
  */
-export function markProcessed(updateId) {
-  if (processedUpdates.has(updateId)) {
-    return false; // уже обработан
-  }
-  processedUpdates.add(updateId);
-  if (processedUpdates.size > MAX_PROCESSED_CACHE) {
-    const toDelete = Array.from(processedUpdates).slice(0, 1000);
-    toDelete.forEach(id => processedUpdates.delete(id));
-  }
-  return true;
+export function markProcessed(key) {
+  const info = getDb()
+    .prepare('INSERT OR IGNORE INTO processed (key, ts) VALUES (?, ?)')
+    .run(String(key), Date.now());
+  return info.changes === 1;
 }
 
 /**
- * Снять пометку «обработан» — вызывается при ошибке обработки,
- * чтобы повторная доставка от Telegram не была отброшена как дубликат
+ * Снять пометку «обработан» — при ошибке обработки, чтобы повторная доставка
+ * не была отброшена как дубликат.
  */
-export function unmarkProcessed(updateId) {
-  processedUpdates.delete(updateId);
+export function unmarkProcessed(key) {
+  getDb().prepare('DELETE FROM processed WHERE key = ?').run(String(key));
+}
+
+/**
+ * Очистить старые записи дедупликации (вызывается при старте и раз в сутки).
+ */
+export function pruneProcessed(ttlMs = PROCESSED_TTL_MS) {
+  try {
+    const info = getDb().prepare('DELETE FROM processed WHERE ts < ?').run(Date.now() - ttlMs);
+    if (info.changes) console.log(`[State] Очищено записей дедупликации: ${info.changes}`);
+  } catch (err) {
+    console.error('[State] Ошибка очистки processed:', err.message);
+  }
 }
 
 /**

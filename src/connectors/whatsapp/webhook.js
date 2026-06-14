@@ -20,12 +20,9 @@ import { resolvePerson, findSimilarPersons } from '../../core/identity.js';
 import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate } from '../../core/format.js';
-import { getConversationHistory, appendConversationHistory, logUpdate } from '../../state.js';
+import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendWaMessage, isWaConfigured } from './api.js';
-
-const processedMessages = new Set();
-const MAX_CACHE = 5000;
 
 export function toEnvelope(message, contactName = '') {
   return createEnvelope({
@@ -186,14 +183,16 @@ export async function waWebhookHandler(req, res) {
         );
         for (const message of value.messages || []) {
           const key = `wa:${message.id}`;
-          if (processedMessages.has(key)) continue;
-          processedMessages.add(key);
-          if (processedMessages.size > MAX_CACHE) {
-            for (const k of Array.from(processedMessages).slice(0, 1000)) processedMessages.delete(k);
-          }
+          // Персистентная дедупликация — переживает рестарт
+          if (!markProcessed(key)) continue;
           logUpdate({ update_id: key, wa: true, type: message.type });
-          const result = await handleWaMessage(message, contacts[message.from] || '');
-          console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+          try {
+            const result = await handleWaMessage(message, contacts[message.from] || '');
+            console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+          } catch (err) {
+            console.error('[WA] Error handling message:', err);
+            unmarkProcessed(key); // дать Meta повторить доставку
+          }
         }
         // statuses (доставлено/прочитано) — игнорируем
       }

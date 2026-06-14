@@ -180,6 +180,12 @@ export async function executeBrainResponse(task) {
     const brainResult = await brainRespond(envelope, { persona, person, history, isFirstTime });
     console.log(`[Execute] Brain result: ok=${brainResult.ok}${brainResult.dry_run ? ' (dry_run)' : ''}`);
 
+    // Владелец ответил сам, пока генерировался ответ — не отправляем дубль
+    if (task.cancelled) {
+      console.log(`[Execute] Task for mapping ${task.mappingId} отменена во время генерации — отправка пропущена`);
+      return;
+    }
+
     // Draft-режим: клиенту ничего не уходит — черновик владельцу на подтверждение
     if (getSettings().draft) {
       saveDraft(task.mappingId, {
@@ -400,8 +406,8 @@ export function createApp() {
       return res.status(400).json({ error: 'Invalid update' });
     }
 
-    // Дедупликация
-    if (!markProcessed(update.update_id)) {
+    // Дедупликация (персистентная — переживает рестарт)
+    if (!markProcessed(`tg:${update.update_id}`)) {
       console.log(`Duplicate update_id: ${update.update_id}`);
       return res.json({ ok: true, duplicate: true });
     }
@@ -427,7 +433,7 @@ export function createApp() {
       console.error('Error processing update:', err);
       // Снимаем пометку дедупликации — Telegram повторит доставку после 500,
       // и повтор не должен быть отброшен как дубликат
-      unmarkProcessed(update.update_id);
+      unmarkProcessed(`tg:${update.update_id}`);
       return res.status(500).json({ error: err.message });
     }
   });

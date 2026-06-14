@@ -11,7 +11,7 @@ import { loadPendingFromFile, getDelayMinutes } from './scheduler.js';
 import { startControlLoop } from './connectors/telegram/control.js';
 import { startPostingSchedule } from './connectors/telegram/channel.js';
 import { getSettings } from './core/modes.js';
-import { rotateLogs } from './state.js';
+import { rotateLogs, pruneProcessed } from './state.js';
 import { closeDb } from './core/db.js';
 
 const PORT = process.env.PORT || 18792;
@@ -54,9 +54,10 @@ const app = createApp();
 // Восстановить отложенные ответы, пережившие рестарт
 loadPendingFromFile();
 
-// Ротация логов (содержат переписки): при старте и раз в сутки
+// Ротация логов (содержат переписки) и очистка дедупликации: при старте и раз в сутки
 rotateLogs();
-setInterval(rotateLogs, 24 * 60 * 60 * 1000).unref();
+pruneProcessed();
+setInterval(() => { rotateLogs(); pruneProcessed(); }, 24 * 60 * 60 * 1000).unref();
 
 // Control plane: команды и кнопки владельца через бота уведомлений.
 // В DRY_RUN не поллим (токены обычно фиктивные); CONTROL_POLLING=false — выключить.

@@ -25,13 +25,9 @@ import { resolvePerson, findSimilarPersons } from '../../core/identity.js';
 import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate, usernameDisplay, timingSafeEqualStr } from '../../core/format.js';
-import { getConversationHistory, appendConversationHistory, logUpdate } from '../../state.js';
+import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendVkMessage, vkApi, isVkConfigured } from './api.js';
-
-// Дедупликация событий ВК (повторная доставка при медленном ответе)
-const processedEvents = new Set();
-const MAX_EVENTS_CACHE = 5000;
 
 function vkDisplayName(profile) {
   return [profile?.first_name, profile?.last_name].filter(Boolean).join(' ');
@@ -190,12 +186,9 @@ export async function vkCallbackHandler(req, res) {
   // ВК ретраит, пока не получит 'ok' — отвечаем сразу, обрабатываем асинхронно
   res.send('ok');
 
-  const eventKey = `${event.group_id}:${event.type}:${event.event_id || JSON.stringify(event.object?.message?.id)}`;
-  if (processedEvents.has(eventKey)) return;
-  processedEvents.add(eventKey);
-  if (processedEvents.size > MAX_EVENTS_CACHE) {
-    for (const k of Array.from(processedEvents).slice(0, 1000)) processedEvents.delete(k);
-  }
+  const eventKey = `vk:${event.group_id}:${event.type}:${event.event_id || JSON.stringify(event.object?.message?.id)}`;
+  // Персистентная дедупликация — переживает рестарт
+  if (!markProcessed(eventKey)) return;
 
   try {
     logUpdate({ update_id: eventKey, vk: true, type: event.type });
@@ -207,5 +200,6 @@ export async function vkCallbackHandler(req, res) {
     }
   } catch (err) {
     console.error('[VK] Error handling event:', err);
+    unmarkProcessed(eventKey); // дать ВК повторить доставку
   }
 }

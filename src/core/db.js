@@ -63,6 +63,11 @@ CREATE TABLE IF NOT EXISTS pending (
   chat_id TEXT PRIMARY KEY,
   data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS processed (
+  key TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_processed_ts ON processed (ts);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
