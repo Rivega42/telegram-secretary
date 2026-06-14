@@ -7,6 +7,7 @@
 
 import { computeStats } from '../../core/stats.js';
 import { feedbackStats } from '../../core/feedback.js';
+import { leadsStats } from '../../core/leads.js';
 import { getAllPending } from '../../scheduler.js';
 import { getAllDrafts } from '../../core/drafts.js';
 import { notifyOwnerText } from '../../forward.js';
@@ -43,6 +44,12 @@ export function buildDigestText(windowHours = 24) {
   const pol = stats.persons.by_policy;
   if (pol.escalate || pol.ignore) {
     lines.push(`🛡 Политики: ${pol.escalate || 0} только мне · ${pol.ignore || 0} игнор`);
+  }
+
+  const leads = leadsStats(windowHours * 3600000);
+  if (leads.new || Object.keys(leads.by_status).length) {
+    const bs = leads.by_status;
+    lines.push(`🔥 Лиды: новых ${leads.new} · в работе ${bs.working || 0} · продано ${bs.won || 0} · потеряно ${bs.lost || 0}`);
   }
 
   const fb = feedbackStats(windowHours * 3600000);

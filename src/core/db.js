@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS feedback (
   rating INTEGER               -- +1 / -1 для лайк/дизлайк
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (ts);
+CREATE TABLE IF NOT EXISTS leads (
+  person_id TEXT PRIMARY KEY,
+  platform TEXT,
+  source TEXT,              -- deep-link метка поста и т.п.
+  display_name TEXT,
+  first_message TEXT,
+  status TEXT NOT NULL,     -- new | working | won | lost
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_leads_status ON leads (status);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

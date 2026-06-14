@@ -32,6 +32,7 @@ import { saveDraft } from '../../core/drafts.js';
 import { truncate, usernameDisplay } from '../../core/format.js';
 import { sendGroupReply, notifyOwnerText } from '../../forward.js';
 import { getConversationHistory, appendConversationHistory } from '../../state.js';
+import { recordLead, exportLeadToCrm } from '../../core/leads.js';
 
 const PUBLIC_AUTO_REPLY = () => process.env.PUBLIC_AUTO_REPLY === 'true';
 
@@ -215,13 +216,26 @@ export async function handleLeadMessage(msg) {
     appendConversationHistory(leadKey, 'vika', brainResult.text);
   }
 
+  // Сохраняем лид со статусом + выгрузка в CRM (если настроена)
+  const { lead, isNew } = recordLead({
+    personId: person.id, platform: 'telegram', source,
+    displayName: person.display_name, firstMessage: text
+  });
+  if (isNew) exportLeadToCrm(lead).catch(() => {});
+
   // Уведомление владельцу: новый лид или продолжение диалога
-  if (person.isNew || source || history.length <= 1) {
+  if (isNew || source || history.length <= 1) {
     await notifyOwnerText(
       `🔥 Лид в боте: ${usernameDisplay(envelope.identity)} (${person.display_name || '—'})` +
       (source ? `\nИсточник: ${source}` : '') +
       `\n«${truncate(text, 200)}»\n\nОтветила: «${truncate(brainResult.text, 200)}»`,
-      { buttons: [[{ text: '🔇 Игнорить', callback_data: `pol:ignore:${person.id}` }]] }
+      { buttons: [[
+        { text: '✅ В работе', callback_data: `lead:working:${person.id}` },
+        { text: '💰 Продано', callback_data: `lead:won:${person.id}` },
+        { text: '❌ Потерян', callback_data: `lead:lost:${person.id}` }
+      ], [
+        { text: '🔇 Игнорить', callback_data: `pol:ignore:${person.id}` }
+      ]] }
     );
   }
 

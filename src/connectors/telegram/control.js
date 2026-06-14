@@ -21,6 +21,7 @@ import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo }
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
 import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js';
 import { recordRating } from '../../core/feedback.js';
+import { setLeadStatus } from '../../core/leads.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
@@ -119,6 +120,14 @@ export async function handleCallback(data, actions) {
       await notifyOwnerText('✍️ Напиши, что поправить («короче», «без эмодзи», «предложи звонок»…) — перегенерирую.');
       return 'Жду комментарий';
     }
+  }
+
+  // Статус лида
+  if (ns === 'lead') {
+    const result = setLeadStatus(arg, op);
+    if (!result.ok) return result.error;
+    const labels = { working: '✅ в работе', won: '💰 продано', lost: '❌ потерян', new: 'новый' };
+    return `Лид: ${labels[op] || op}`;
   }
 
   // Оценка ответа (👍/👎) — петля качества
