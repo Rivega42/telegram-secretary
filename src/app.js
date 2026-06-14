@@ -40,7 +40,8 @@ import { respond as brainRespond } from './core/brain.js';
 import { loadPersona } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
 import { createEnvelope } from './core/envelope.js';
-import { truncate, usernameDisplay } from './core/format.js';
+import { truncate, usernameDisplay, timingSafeEqualStr } from './core/format.js';
+import { getDb } from './core/db.js';
 import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
 import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
@@ -327,8 +328,11 @@ export function createApp() {
 
   const app = express();
 
-  // rawBody нужен для проверки подписи WhatsApp (X-Hub-Signature-256)
+  // rawBody нужен для проверки подписи WhatsApp (X-Hub-Signature-256).
+  // Лимит тела: webhook'и мессенджеров — небольшие JSON; 256kb с запасом,
+  // защита от раздувания памяти неожиданно большим payload.
   app.use(express.json({
+    limit: process.env.BODY_LIMIT || '256kb',
     verify: (req, res, buf) => { req.rawBody = buf; }
   }));
 
@@ -337,29 +341,39 @@ export function createApp() {
     next();
   });
 
-  // Авторизация админ-API: X-Api-Key или Authorization: Bearer
+  // Авторизация админ-API: X-Api-Key или Authorization: Bearer (timing-safe)
   app.use('/api', (req, res, next) => {
     if (!API_KEY) return next(); // не настроен — предупреждение выводится при старте
     const provided = req.headers['x-api-key']
       || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    if (provided !== API_KEY) {
+    if (!timingSafeEqualStr(provided, API_KEY)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     next();
   });
 
   /**
-   * Health check
+   * Health check: проверяет доступность БД (для readiness-проб).
+   * 503 при недоступной БД — оркестратор/мониторинг увидит проблему.
+   * owner_chat_id отдаётся как флаг, а не значение (не светим ID наружу).
    */
   app.get('/health', (req, res) => {
-    res.json({
-      status: 'ok',
+    let dbOk = false;
+    try {
+      getDb().prepare('SELECT 1').get();
+      dbOk = true;
+    } catch (err) {
+      console.error('[Health] DB check failed:', err.message);
+    }
+    res.status(dbOk ? 200 : 503).json({
+      status: dbOk ? 'ok' : 'degraded',
+      db: dbOk,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       env: {
         business_token: !!process.env.BUSINESS_BOT_TOKEN,
         oneint_token: !!process.env.ONEINT_BOT_TOKEN,
-        owner_chat_id: process.env.OWNER_CHAT_ID,
+        owner_chat_id: !!process.env.OWNER_CHAT_ID,
         state_dir: process.env.STATE_DIR,
         dry_run: process.env.DRY_RUN === 'true'
       },
@@ -374,7 +388,7 @@ export function createApp() {
   app.post('/tg/business-webhook', async (req, res) => {
     if (WEBHOOK_SECRET) {
       const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
-      if (headerSecret !== WEBHOOK_SECRET) {
+      if (!timingSafeEqualStr(headerSecret, WEBHOOK_SECRET)) {
         console.warn('Invalid webhook secret');
         return res.status(403).json({ error: 'Invalid secret' });
       }
@@ -682,6 +696,21 @@ export function createApp() {
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
+  });
+
+  // Глобальный обработчик ошибок: ловит синхронные ошибки роутов и невалидный
+  // JSON (express.json кидает 400). Детали — в лог, наружу — без стектрейса.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'Payload too large' });
+    }
+    if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+    console.error(`[Error] ${req.method} ${req.path}:`, err.message);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ error: 'Internal error' });
   });
 
   return app;

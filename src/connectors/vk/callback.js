@@ -24,7 +24,7 @@ import { loadPersona } from '../../core/persona.js';
 import { resolvePerson, findSimilarPersons } from '../../core/identity.js';
 import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
-import { truncate, usernameDisplay } from '../../core/format.js';
+import { truncate, usernameDisplay, timingSafeEqualStr } from '../../core/format.js';
 import { getConversationHistory, appendConversationHistory, logUpdate } from '../../state.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendVkMessage, vkApi, isVkConfigured } from './api.js';
@@ -182,7 +182,7 @@ export async function vkCallbackHandler(req, res) {
   }
 
   // Подлинность события
-  if (process.env.VK_SECRET && event.secret !== process.env.VK_SECRET) {
+  if (process.env.VK_SECRET && !timingSafeEqualStr(event.secret, process.env.VK_SECRET)) {
     console.warn('[VK] Invalid callback secret');
     return res.status(403).send('forbidden');
   }

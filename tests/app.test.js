@@ -66,11 +66,28 @@ async function api(pathname, options = {}) {
   return { status: r.status, body: await r.json() };
 }
 
-test('health: отвечает и показывает dry_run', async () => {
+test('health: отвечает, проверяет БД, не светит owner_chat_id', async () => {
   const r = await fetch(`${base}/health`);
   const body = await r.json();
+  assert.equal(r.status, 200);
   assert.equal(body.status, 'ok');
+  assert.equal(body.db, true); // SELECT 1 прошёл
   assert.equal(body.env.dry_run, true);
+  assert.equal(body.env.owner_chat_id, true); // флаг, не значение
+});
+
+test('невалидный JSON в webhook → 400 (глобальный error-handler)', async () => {
+  const r = await fetch(`${base}/tg/business-webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{ broken'
+  });
+  assert.equal(r.status, 400);
+});
+
+test('неверный API-ключ → 401 (timing-safe сравнение)', async () => {
+  const r = await fetch(`${base}/api/pending`, { headers: { 'X-Api-Key': 'wrong-key-different-length' } });
+  assert.equal(r.status, 401);
 });
 
 test('админ-API: 401 без ключа, 200 с ключом', async () => {

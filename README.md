@@ -175,6 +175,7 @@ curl -X POST -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' \
 | [docs/architecture.md](./docs/architecture.md) | Текущая архитектура: компоненты, поток сообщения, стейт (mermaid) |
 | [docs/operations.md](./docs/operations.md) | Управление и эксплуатация: режимы, политики, мониторинг, бэкап |
 | [docs/code-map.md](./docs/code-map.md) | Карта кода: модули, функции, «какая переменная что включает» |
+| [docs/production-readiness.md](./docs/production-readiness.md) | Готовность к проду: scorecard, чеклист запуска, ограничения |
 | [docs/openclaw-integration.md](./docs/openclaw-integration.md) | Целевая архитектура: единая память, мультиплатформенность |
 | [docs/deployment.md](./docs/deployment.md) | Развёртывание: Docker, PM2, Nginx, webhook |
 | [docs/vika-style.md](./docs/vika-style.md) | Стиль общения секретаря |

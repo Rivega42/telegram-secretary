@@ -7,9 +7,10 @@
  */
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
+const TG_TIMEOUT_MS = parseInt(process.env.TG_TIMEOUT_MS || '15000', 10);
 
 /**
- * Базовый Telegram API вызов
+ * Базовый Telegram API вызов с таймаутом (повисший Telegram не блокирует процесс).
  */
 async function telegramApi(token, method, body = {}) {
   if (DRY_RUN) {
@@ -18,20 +19,21 @@ async function telegramApi(token, method, body = {}) {
   }
 
   const url = `https://api.telegram.org/bot${token}/${method}`;
-  
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(TG_TIMEOUT_MS),
       body: JSON.stringify(body)
     });
-    
+
     const data = await response.json();
-    
+
     if (!data.ok) {
       console.error(`Telegram API error [${method}]:`, data.description);
     }
-    
+
     return data;
   } catch (err) {
     console.error(`Telegram API fetch error [${method}]:`, err.message);

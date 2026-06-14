@@ -77,6 +77,8 @@ export function getDb() {
 
   db = new Database(path.join(dir, 'secretary.db'));
   db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000'); // ждать до 5с при конкурентной блокировке вместо ошибки
+  db.pragma('synchronous = NORMAL'); // безопасно в WAL, заметно быстрее
   db.exec(SCHEMA);
   migrateFromJson(db, dir);
   return db;

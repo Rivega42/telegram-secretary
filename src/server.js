@@ -12,6 +12,7 @@ import { startControlLoop } from './connectors/telegram/control.js';
 import { startPostingSchedule } from './connectors/telegram/channel.js';
 import { getSettings } from './core/modes.js';
 import { rotateLogs } from './state.js';
+import { closeDb } from './core/db.js';
 
 const PORT = process.env.PORT || 18792;
 
@@ -59,14 +60,15 @@ setInterval(rotateLogs, 24 * 60 * 60 * 1000).unref();
 
 // Control plane: команды и кнопки владельца через бота уведомлений.
 // В DRY_RUN не поллим (токены обычно фиктивные); CONTROL_POLLING=false — выключить.
+let controlLoop = { stop: () => {} };
 if (process.env.CONTROL_POLLING !== 'false' && process.env.DRY_RUN !== 'true') {
-  startControlLoop(createControlActions());
+  controlLoop = startControlLoop(createControlActions());
 }
 
 // Автопостинг канала (включается, если заданы CHANNEL_ID и POSTING_TIMES)
-startPostingSchedule(createControlActions());
+const postingSchedule = startPostingSchedule(createControlActions());
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`\n🚀 Secretary Proxy started on port ${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/health`);
   console.log(`   Webhook: POST http://localhost:${PORT}/tg/business-webhook`);
@@ -89,4 +91,46 @@ app.listen(PORT, () => {
     console.warn('   ⚠️  WEBHOOK_SECRET не задан — webhook принимает запросы без проверки секрета.');
   }
   console.log('');
+});
+
+/**
+ * Корректная остановка по SIGTERM/SIGINT (docker stop, systemd, Ctrl-C):
+ * перестаём поллить, закрываем HTTP-сервер (даём дойти текущим запросам),
+ * закрываем SQLite — и только потом выходим. Жёсткий лимит на случай зависания.
+ */
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[Shutdown] Получен ${signal} — останавливаюсь...`);
+
+  controlLoop.stop();
+  postingSchedule.stop();
+
+  const hardExit = setTimeout(() => {
+    console.error('[Shutdown] Не закрылись за 10с — выходим принудительно');
+    process.exit(1);
+  }, 10000);
+  hardExit.unref();
+
+  server.close(() => {
+    try { closeDb(); } catch { /* already closed */ }
+    console.log('[Shutdown] HTTP-сервер и БД закрыты, выходим');
+    clearTimeout(hardExit);
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Не падаем от необработанного промиса (например, сетевой сбой в фоновом fetch);
+// логируем, чтобы было видно в мониторинге.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  // Неизвестное состояние — корректно тушимся, процесс-менеджер поднимет заново.
+  shutdown('uncaughtException');
 });

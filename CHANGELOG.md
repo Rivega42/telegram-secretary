@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+### Усилено (production hardening)
+- **Graceful shutdown**: `SIGTERM`/`SIGINT` останавливают control-loop и автопостинг,
+  закрывают HTTP-сервер и SQLite, hard-exit через 10с при зависании (`docker stop`
+  больше не упирается в SIGKILL)
+- **Process-level handlers**: `unhandledRejection` (лог), `uncaughtException`
+  (лог + корректное тушение)
+- **Глобальный Express error-handler**: битый JSON → 400, превышение тела → 413,
+  прочее → 500 без стектрейса наружу
+- **Timing-safe сравнение секретов** (`core/format.js`): API_KEY, Telegram
+  `WEBHOOK_SECRET`, `VK_SECRET` (WhatsApp HMAC уже был timing-safe)
+- **SQLite**: `busy_timeout=5s` + `synchronous=NORMAL` (надёжность при конкуренции, скорость)
+- **Таймаут Telegram API** (`TG_TIMEOUT_MS`, 15с) — повисший Telegram не блокирует процесс
+- **Health**: проверяет БД (`SELECT 1`), отдаёт 503 при сбое; `owner_chat_id` — флаг, не значение
+- **Лимит тела** вынесен в `BODY_LIMIT` (256kb по умолчанию)
+- Новый `docs/production-readiness.md`: вердикт, scorecard, чеклист запуска, ограничения;
+  `deployment.md` актуализирован (бэкап SQLite через `.backup`)
+- Тесты: +2 (health с проверкой БД, битый JSON → 400) — всего 80
+
 ### Добавлено (этап 4 — WhatsApp, #22)
 - **Коннектор WhatsApp** (`src/connectors/whatsapp/`): личка бизнес-номера через
   Business Cloud API — `GET /wa/webhook` (верификация подписки), `POST /wa/webhook`
