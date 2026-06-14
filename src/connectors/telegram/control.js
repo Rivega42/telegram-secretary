@@ -23,6 +23,7 @@ import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js'
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
+import { buildDigestText } from './digest.js';
 
 const OWNER_CHAT_ID = () => String(process.env.OWNER_CHAT_ID || '');
 
@@ -43,6 +44,7 @@ const HELP_TEXT = `Команды секретаря:
 /vacation — отпуск: отвечать почти сразу (~${VACATION_DELAY_SECONDS} сек)
 /draft — вкл/выкл режим черновиков (ответ уходит только после твоего подтверждения)
 /status — текущий режим и очередь
+/digest — сводка за сутки (сообщения, диалоги, лиды, платформы)
 /help — эта справка
 
 Кнопки под уведомлениями: ответить сейчас / свой ответ / отменить,
@@ -72,6 +74,7 @@ export function handleCommand(text) {
         : '📤 Черновики выключены: ответы уходят автоматически.';
     }
     case '/status': return statusText();
+    case '/digest': return buildDigestText(24);
     case '/start':
     case '/help': return HELP_TEXT;
     default: return null;

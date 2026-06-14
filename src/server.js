@@ -10,6 +10,7 @@ import { createApp, createControlActions } from './app.js';
 import { loadPendingFromFile, getDelayMinutes } from './scheduler.js';
 import { startControlLoop } from './connectors/telegram/control.js';
 import { startPostingSchedule } from './connectors/telegram/channel.js';
+import { startDigestSchedule } from './connectors/telegram/digest.js';
 import { getSettings } from './core/modes.js';
 import { rotateLogs, pruneProcessed } from './state.js';
 import { closeDb } from './core/db.js';
@@ -69,6 +70,9 @@ if (process.env.CONTROL_POLLING !== 'false' && process.env.DRY_RUN !== 'true') {
 // Автопостинг канала (включается, если заданы CHANNEL_ID и POSTING_TIMES)
 const postingSchedule = startPostingSchedule(createControlActions());
 
+// Ежедневный дайджест владельцу (включается, если задан DIGEST_TIME)
+const digestSchedule = startDigestSchedule();
+
 const server = app.listen(PORT, () => {
   console.log(`\n🚀 Secretary Proxy started on port ${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/health`);
@@ -107,6 +111,7 @@ function shutdown(signal) {
 
   controlLoop.stop();
   postingSchedule.stop();
+  digestSchedule.stop();
 
   const hardExit = setTimeout(() => {
     console.error('[Shutdown] Не закрылись за 10с — выходим принудительно');

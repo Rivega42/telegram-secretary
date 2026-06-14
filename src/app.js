@@ -43,7 +43,8 @@ import { createEnvelope } from './core/envelope.js';
 import { truncate, usernameDisplay, timingSafeEqualStr } from './core/format.js';
 import { getDb } from './core/db.js';
 import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
-import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
+import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js';
+import { computeStats } from './core/stats.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -633,6 +634,19 @@ export function createApp() {
    */
   app.get('/api/mode', (req, res) => {
     res.json(getSettings());
+  });
+
+  /**
+   * API: метрики/статистика. ?hours=24 (окно).
+   */
+  app.get('/api/stats', (req, res) => {
+    const hours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+    const stats = computeStats({ sinceMs: hours * 3600000 });
+    res.json({
+      ...stats,
+      pending: Object.keys(getAllPending()).length,
+      drafts: Object.keys(getAllDrafts()).length
+    });
   });
 
   /**
