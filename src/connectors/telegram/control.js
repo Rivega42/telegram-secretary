@@ -20,6 +20,7 @@
 import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo } from '../../forward.js';
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
 import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js';
+import { recordRating } from '../../core/feedback.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
@@ -118,6 +119,13 @@ export async function handleCallback(data, actions) {
       await notifyOwnerText('✍️ Напиши, что поправить («короче», «без эмодзи», «предложи звонок»…) — перегенерирую.');
       return 'Жду комментарий';
     }
+  }
+
+  // Оценка ответа (👍/👎) — петля качества
+  if (ns === 'fb') {
+    const [surface, personId] = rest;
+    recordRating({ surface: surface || 'dm', personId: personId === '-' ? null : personId, rating: op === 'up' ? 1 : -1 });
+    return op === 'up' ? '👍 учту' : '👎 учту';
   }
 
   // Склейка персон между платформами — только по этому явному подтверждению (#10)

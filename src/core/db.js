@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS processed (
   ts INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_processed_ts ON processed (ts);
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,          -- 'correction' | 'rating'
+  surface TEXT,
+  person_id TEXT,
+  original TEXT,               -- черновик/ответ до правки
+  note TEXT,                   -- указание владельца при «Переписать»
+  corrected TEXT,              -- итоговый текст после правки
+  rating INTEGER               -- +1 / -1 для лайк/дизлайк
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (ts);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

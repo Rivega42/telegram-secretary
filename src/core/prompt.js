@@ -23,8 +23,9 @@ export function historyLabel(from, persona) {
 /**
  * Контекст отправителя + история + текущее сообщение.
  * rewrite: { previous, note } — режим переписывания черновика по указанию владельца.
+ * corrections: [{ note, corrected }] — недавние правки владельца (few-shot стиля).
  */
-export function buildUserPrompt(envelope, { history = [], persona, isFirstTime = true, rewrite = null }) {
+export function buildUserPrompt(envelope, { history = [], persona, isFirstTime = true, rewrite = null, corrections = [] }) {
   const now = new Date().toLocaleString('ru-RU', { timeZone: process.env.TZ_DISPLAY || 'Europe/Moscow' });
   let p = `⏰ СЕЙЧАС: ${now}
 
@@ -46,6 +47,15 @@ export function buildUserPrompt(envelope, { history = [], persona, isFirstTime =
     }
     p += block + '---\n\n';
   }
+  // Few-shot: как владелец правил похожие ответы (стиль/тон)
+  if (corrections.length) {
+    p += `\n✍️ КАК ВЛАДЕЛЕЦ ПРАВИЛ ОТВЕТЫ (учитывай стиль):\n`;
+    for (const c of corrections) {
+      p += `- указание «${c.note}» → итог: «${c.corrected}»\n`;
+    }
+    p += '\n';
+  }
+
   p += `📩 ТЕКУЩЕЕ СООБЩЕНИЕ ОТ КЛИЕНТА:\n${envelope.text}`;
 
   if (rewrite) {

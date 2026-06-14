@@ -82,6 +82,7 @@ export function loadPersona({ force = false } = {}) {
   cache = {
     ...config,
     base_md: readIfExists(path.join(PERSONA_DIR, 'base.md')) || GENERIC_BASE_MD,
+    facts_md: readIfExists(path.join(PERSONA_DIR, 'facts.md')) || '',
     surface_md: {
       dm: readIfExists(path.join(PERSONA_DIR, 'dm.md')) || '',
       comments: readIfExists(path.join(PERSONA_DIR, 'public.md')) || '',
@@ -112,6 +113,14 @@ export function buildSystemPrompt(persona, surface = 'dm') {
 
   const surfaceMd = persona.surface_md[surface];
   if (surfaceMd) parts.push(renderTemplate(surfaceMd, persona.vars));
+
+  // База знаний: факты, на которые секретарь опирается (не выдумывает сверх неё)
+  if (persona.facts_md && persona.facts_md.trim()) {
+    parts.push(
+      'БАЗА ЗНАНИЙ (опирайся на эти факты; если ответа здесь нет — честно скажи, что уточнишь у владельца):\n' +
+      renderTemplate(persona.facts_md, persona.vars)
+    );
+  }
 
   const disclose = persona.disclosure[surface] !== false;
   parts.push(renderTemplate(

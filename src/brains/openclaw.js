@@ -23,6 +23,7 @@
 import { chatCompletions } from './llm-http.js';
 import { buildSystemPrompt } from '../core/persona.js';
 import { buildUserPrompt } from '../core/prompt.js';
+import { recentCorrections } from '../core/feedback.js';
 
 export async function respond(envelope, ctx, instance) {
   const { persona, person, history = [], isFirstTime = true, rewrite = null } = ctx;
@@ -45,7 +46,8 @@ export async function respond(envelope, ctx, instance) {
       history: stateful ? [] : history,
       persona,
       isFirstTime,
-      rewrite
+      rewrite,
+      corrections: recentCorrections(envelope.surface)
     })
   });
 

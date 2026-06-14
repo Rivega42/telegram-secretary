@@ -45,6 +45,7 @@ import { getDb } from './core/db.js';
 import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
 import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js';
 import { computeStats } from './core/stats.js';
+import { recordCorrection } from './core/feedback.js';
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -228,7 +229,14 @@ export async function executeBrainResponse(task) {
       `💼 [${persona.secretary_name} → ${usernameDisplay(envelope.identity)}]\n(⏱ отложенный ответ)\n` +
       `Получено: «${truncate(task.originalText, 200)}»\n` +
       `Ответила: «${truncate(brainResult.text, 300)}»` +
-      (replyResult.ok ? '' : '\n⚠️ ОТПРАВКА НЕ УДАЛАСЬ')
+      (replyResult.ok ? '' : '\n⚠️ ОТПРАВКА НЕ УДАЛАСЬ'),
+      // Оценка ответа — обучающий сигнал для дайджеста/качества
+      replyResult.ok
+        ? { buttons: [[
+            { text: '👍', callback_data: `fb:up:${envelope.surface}:${person?.id || '-'}` },
+            { text: '👎', callback_data: `fb:down:${envelope.surface}:${person?.id || '-'}` }
+          ]] }
+        : {}
     );
   } catch (err) {
     console.error('[Execute] Error executing brain response:', err);
@@ -309,6 +317,14 @@ export function createControlActions() {
         persona, person, history,
         isFirstTime: false,
         rewrite: { previous: draft.text, note }
+      });
+      // Петля качества: правка владельца — обучающий сигнал (few-shot в будущих промптах)
+      recordCorrection({
+        surface: draft.envelope?.surface || 'dm',
+        personId: draft.person_id || null,
+        original: draft.text,
+        note,
+        corrected: brainResult.text
       });
       saveDraft(mappingId, { ...draft, text: brainResult.text });
       await notifyOwnerText(

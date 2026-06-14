@@ -6,6 +6,7 @@
  */
 
 import { computeStats } from '../../core/stats.js';
+import { feedbackStats } from '../../core/feedback.js';
 import { getAllPending } from '../../scheduler.js';
 import { getAllDrafts } from '../../core/drafts.js';
 import { notifyOwnerText } from '../../forward.js';
@@ -42,6 +43,11 @@ export function buildDigestText(windowHours = 24) {
   const pol = stats.persons.by_policy;
   if (pol.escalate || pol.ignore) {
     lines.push(`🛡 Политики: ${pol.escalate || 0} только мне · ${pol.ignore || 0} игнор`);
+  }
+
+  const fb = feedbackStats(windowHours * 3600000);
+  if (fb.corrections || fb.likes || fb.dislikes) {
+    lines.push(`📈 Качество: 👍 ${fb.likes} · 👎 ${fb.dislikes} · правок ${fb.corrections}`);
   }
 
   if (pending) lines.push(`⏳ Ждут автоответа: ${pending}`);
