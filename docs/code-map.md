@@ -78,8 +78,11 @@ flowchart TB
 | `modes.js` | Глобальные режимы `/on /off /vacation` + draft-флаг (`mode.json`) | `getSettings()`, `setMode()`, `setDraft()` |
 | `drafts.js` | Черновики всех видов (`drafts.json`): dm / community / channel / vk / wa | `saveDraft()`, `getDraft()`, `deleteDraft()` |
 | `ratelimit.js` | Скользящее окно для публичных ответов (на человека и чат) | `allowReply(chatId, userId)` |
-| `db.js` | SQLite `secretary.db` (WAL), схема, авто-миграция старых JSON | `getDb()`, `closeDb()` |
-| `format.js` | Мелкие форматтеры уведомлений | `truncate()`, `usernameDisplay()` |
+| `stats.js` | Агрегаты для дайджеста/метрик из `history`/`persons` | `computeStats({sinceMs})`, `platformOf()` |
+| `feedback.js` | Петля качества: правки (few-shot) и оценки 👍/👎 | `recordCorrection()`, `recordRating()`, `recentCorrections()`, `feedbackStats()` |
+| `leads.js` | Лиды со статусами + выгрузка в CRM | `recordLead()`, `setLeadStatus()`, `listLeads()`, `leadsStats()`, `exportLeadToCrm()` |
+| `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |
+| `format.js` | Мелкие форматтеры + timing-safe сравнение секретов | `truncate()`, `usernameDisplay()`, `timingSafeEqualStr()` |
 
 ## Драйверы мозга (`src/brains/`)
 
@@ -97,6 +100,7 @@ flowchart TB
 | `telegram/control.js` | Пульт владельца: команды, кнопки, маршрутизация групп/лидов | `startControlLoop(actions)`, `handleControlUpdate()`, `handleCommand()`, `handleCallback()` |
 | `telegram/community.js` | Комментарии канала, Q&A в группах, лид-воронка | `handleGroupMessage(msg, botInfo)`, `handleLeadMessage(msg)`, `classifySurface()`, `shouldReply()` |
 | `telegram/channel.js` | Автопостинг по контент-плану (только черновик) | `startPostingSchedule()`, `generatePost(topic)`, `nextTopic()`, `recordPosted()` |
+| `telegram/digest.js` | Дайджест владельцу: ежедневно + `/digest` | `startDigestSchedule()`, `buildDigestText()`, `sendDigest()` |
 | `telegram/stt.js` | Whisper-транскрипция голосовых (опционально) | `transcribeVoice(msg)`, `isSttConfigured()` |
 | `vk/api.js`, `vk/callback.js` | ЛС сообществу ВКонтакте (Callback API) | `vkCallbackHandler(req,res)`, `handleVkMessage()`, `sendVkMessage()` |
 | `whatsapp/api.js`, `whatsapp/webhook.js` | Личка WhatsApp бизнес-номера (Cloud API) | `waVerifyHandler()`, `waWebhookHandler()`, `handleWaMessage()`, `sendWaMessage()` |
