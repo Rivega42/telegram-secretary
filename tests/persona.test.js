@@ -3,7 +3,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
+process.env.STATE_DIR = fs.mkdtempSync('/tmp/secretary-test-persona-');
 process.env.PERSONA_DIR = './persona';
 
 const { loadPersona, buildSystemPrompt, renderTemplate } = await import('../src/core/persona.js');

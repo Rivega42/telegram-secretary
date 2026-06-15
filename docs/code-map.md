@@ -71,11 +71,11 @@ flowchart TB
 |---|---|---|
 | `envelope.js` | Платформо-нейтральный конверт сообщения + `capabilities` | `createEnvelope({...})`, `routingKey(envelope)`, `SURFACES` |
 | `brain.js` | Единая точка генерации ответа; выбор инстанса и драйвера; fallback из персоны при ошибках | `respond(envelope, ctx)` |
-| `persona.js` | Персона из `PERSONA_DIR` (шаблоны `{{owner_name}}`…), disclosure per-surface, generic-фоллбек без имён | `loadPersona()`, `buildSystemPrompt(persona, surface)`, `renderTemplate()` |
+| `persona.js` | Персона per-tenant: БД (`tenant_persona`) → файлы `persona/` (default) → generic; disclosure per-surface | `loadPersona()`, `buildSystemPrompt()`, `setTenantPersona()`, `getTenantPersonaRaw()` |
 | `identity.js` | Персоны: память по людям, политики, склейка только явная | `resolvePerson()`, `getPerson()`, `setPersonPolicy()`, `findSimilarPersons()`, `mergePersons()`, `POLICIES` |
 | `instances.js` | Реестр LLM/OpenClaw-инстансов (`instances.json`, `${ENV}`-подстановка), маршрутизация `platform:surface → инстанс` | `loadInstances()`, `getInstanceFor(key)` |
 | `prompt.js` | Общий промпт: контекст + история (хронологически!) + rewrite-блок | `buildUserPrompt(envelope, {history, persona, rewrite})` |
-| `modes.js` | Глобальные режимы `/on /off /vacation` + draft-флаг (`mode.json`) | `getSettings()`, `setMode()`, `setDraft()` |
+| `modes.js` | Режимы per-tenant `/on /off /vacation` + draft (`tenant_settings`) | `getSettings()`, `setMode()`, `setDraft()` |
 | `drafts.js` | Черновики всех видов (`drafts.json`): dm / community / channel / vk / wa | `saveDraft()`, `getDraft()`, `deleteDraft()` |
 | `ratelimit.js` | Скользящее окно для публичных ответов (на человека и чат) | `allowReply(chatId, userId)` |
 | `stats.js` | Агрегаты для дайджеста/метрик из `history`/`persons` | `computeStats({sinceMs})`, `platformOf()` |

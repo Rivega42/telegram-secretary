@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS tenant_channels (
   tenant_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_channels_tenant ON tenant_channels (tenant_id);
+CREATE TABLE IF NOT EXISTS tenant_settings (
+  tenant_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL DEFAULT '{}'   -- {mode, draft, ...} режимы арендатора
+);
+CREATE TABLE IF NOT EXISTS tenant_persona (
+  tenant_id TEXT PRIMARY KEY,
+  persona_json TEXT,   -- persona.json (имя, владелец, disclosure, fallback)
+  base_md TEXT, dm_md TEXT, public_md TEXT, facts_md TEXT
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

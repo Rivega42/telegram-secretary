@@ -1,48 +1,62 @@
 /**
- * modes.js — глобальные режимы секретаря (control plane)
+ * modes.js — режимы секретаря per-tenant (control plane)
  *
- * mode.json в STATE_DIR:
- *   { "mode": "auto" | "off" | "vacation", "draft": false }
+ * Хранится в таблице tenant_settings (по арендатору): { mode, draft }.
+ *   mode:  auto | off | vacation
+ *   draft: true → ответ уходит только после подтверждения владельца
  *
- * mode:
- *   auto     — обычная работа: отложенный автоответ
- *   off      — «я свободен»: только уведомления владельцу, без автоответов
- *   vacation — «отпуск»: отвечать почти сразу (короткая задержка)
- * draft:
- *   true — ответы не уходят клиенту сразу: черновик владельцу на подтверждение
- *
- * Управляется командами боту уведомлений: /on /off /vacation /draft /status
- * (см. connectors/telegram/control.js) — переживает рестарт.
+ * Управляется командами боту уведомлений: /on /off /vacation /draft /status.
+ * Старый глобальный mode.json мигрируется в арендатора default при первом чтении.
  */
 
 import fs from 'fs';
 import path from 'path';
+import { getDb } from './db.js';
+import { currentTenantId, DEFAULT_TENANT } from './context.js';
 
 const STATE_DIR = process.env.STATE_DIR || './state';
 const MODE_FILE = path.join(STATE_DIR, 'mode.json');
 
 export const MODES = ['auto', 'off', 'vacation'];
-
-// Задержка в режиме «отпуск», сек (чуть-чуть «человечности» вместо мгновенного ответа)
 export const VACATION_DELAY_SECONDS = parseInt(process.env.VACATION_DELAY_SECONDS || '20', 10);
 
 const DEFAULTS = { mode: 'auto', draft: false };
+let migratedModeJson = false;
 
-export function getSettings() {
+/**
+ * Одноразовая миграция глобального mode.json → арендатор default.
+ */
+function migrateModeJsonOnce(db) {
+  if (migratedModeJson) return;
+  migratedModeJson = true;
   try {
-    if (fs.existsSync(MODE_FILE)) {
+    if (fs.existsSync(MODE_FILE) && !db.prepare('SELECT 1 FROM tenant_settings WHERE tenant_id = ?').get(DEFAULT_TENANT)) {
       const data = JSON.parse(fs.readFileSync(MODE_FILE, 'utf-8'));
-      return { ...DEFAULTS, ...data };
+      db.prepare('INSERT OR REPLACE INTO tenant_settings (tenant_id, data) VALUES (?, ?)')
+        .run(DEFAULT_TENANT, JSON.stringify({ mode: data.mode || 'auto', draft: !!data.draft }));
+      fs.renameSync(MODE_FILE, `${MODE_FILE}.migrated`);
+      console.log('[Modes] mode.json мигрирован в арендатора default');
     }
   } catch (err) {
-    console.error('[Modes] Error loading mode.json:', err.message);
+    console.error('[Modes] Ошибка миграции mode.json:', err.message);
   }
-  return { ...DEFAULTS };
+}
+
+export function getSettings() {
+  const db = getDb();
+  migrateModeJsonOnce(db);
+  const row = db.prepare('SELECT data FROM tenant_settings WHERE tenant_id = ?').get(currentTenantId());
+  if (!row) return { ...DEFAULTS };
+  try {
+    return { ...DEFAULTS, ...JSON.parse(row.data) };
+  } catch {
+    return { ...DEFAULTS };
+  }
 }
 
 function save(settings) {
-  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(MODE_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+  getDb().prepare('INSERT OR REPLACE INTO tenant_settings (tenant_id, data) VALUES (?, ?)')
+    .run(currentTenantId(), JSON.stringify(settings));
 }
 
 export function setMode(mode) {

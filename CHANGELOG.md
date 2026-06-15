@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS, фаза S3 — конфиг per-tenant)
+- **Персона per-tenant** (`tenant_persona`): у каждого арендатора своя личность
+  секретаря и факты. Источник: БД → файлы `persona/` (арендатор `default`) → нейтральная
+  generic. Admin: `GET/POST /api/admin/tenants/:id/persona`
+- **Режимы per-tenant** (`tenant_settings`): `/on /off /vacation /draft` независимы
+  у арендаторов; старый `mode.json` мигрируется в `default`. Admin:
+  `GET/POST /api/admin/tenants/:id/settings`
+- **Уведомления владельцу per-tenant**: шлются на `owner_chat_id` арендатора
+  (fallback — env `OWNER_CHAT_ID`)
+- Осознанно отложено: per-tenant инстансы мозга (BYO-LLM), контент-план/черновики,
+  control-plane от нескольких владельцев (S4/S5)
+- Тесты: +5 (персона default/generic/заданная, режимы независимы, admin-API) — всего 118
+
+
 ### Изменено (SaaS, фаза S2 — изоляция данных по арендаторам)
 - **`tenant_id` во всех таблицах данных** (connections, contacts, conversations,
   history, persons, person_identities, pending, feedback, leads); там, где внешний id

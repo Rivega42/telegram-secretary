@@ -37,12 +37,12 @@ import {
 } from './state.js';
 import { sendBusinessReply, notifyOwnerText, editOwnerMessage, sendGroupReply, simulateTyping } from './forward.js';
 import { respond as brainRespond } from './core/brain.js';
-import { loadPersona } from './core/persona.js';
+import { loadPersona, setTenantPersona, getTenantPersonaRaw } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
 import { createEnvelope } from './core/envelope.js';
 import { truncate, usernameDisplay, timingSafeEqualStr } from './core/format.js';
 import { getDb } from './core/db.js';
-import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
+import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from './core/modes.js';
 import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js';
 import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
@@ -705,6 +705,44 @@ export function createApp() {
     const result = registerChannel(channel_key, req.params.id);
     if (!result.ok) return res.status(400).json(result);
     res.status(201).json(result);
+  });
+
+  /**
+   * Admin: персона арендатора (SaaS S3). Поля: persona_json (объект/строка),
+   * base_md, dm_md, public_md, facts_md.
+   */
+  app.get('/api/admin/tenants/:id/persona', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(getTenantPersonaRaw(req.params.id) || { tenant_id: req.params.id, persona_json: null });
+  });
+
+  app.post('/api/admin/tenants/:id/persona', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const result = setTenantPersona(req.params.id, req.body || {});
+    res.json(result);
+  });
+
+  /**
+   * Admin: режимы арендатора (mode/draft) — то же, что команды боту, но для любого арендатора.
+   */
+  app.get('/api/admin/tenants/:id/settings', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(runWithTenant(req.params.id, () => getSettings()));
+  });
+
+  app.post('/api/admin/tenants/:id/settings', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const { mode, draft } = req.body || {};
+    const result = runWithTenant(req.params.id, () => {
+      if (mode !== undefined) {
+        const r = setMode(mode);
+        if (!r.ok) return r;
+      }
+      if (draft !== undefined) setDraft(draft);
+      return { ok: true, settings: getSettings() };
+    });
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
   });
 
   /**

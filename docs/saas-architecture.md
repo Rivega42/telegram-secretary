@@ -126,6 +126,24 @@ erDiagram
 деплой), VK → `vk:<group_id>`, WA → `wa:<phone_number_id>`; не найден → `default`.
 Scheduler хранит `tenantId` в задаче и исполняет ответ в `runWithTenant`.
 
+## Реализация конфига per-tenant (S3)
+
+Новые таблицы: `tenant_settings` (режимы `{mode,draft}` по арендатору) и
+`tenant_persona` (`persona_json` + `base_md`/`dm_md`/`public_md`/`facts_md`).
+
+- **Персона**: `loadPersona()` кэширует по арендатору. Источник: запись в
+  `tenant_persona` → арендатор `default` без записи → файлы `persona/` (обратная
+  совместимость) → прочие без записи → нейтральная generic (без имён). Admin задаёт
+  персону: `POST /api/admin/tenants/:id/persona`.
+- **Режимы** (`core/modes.js`): из `tenant_settings` по арендатору; старый `mode.json`
+  мигрируется в `default`. Admin: `POST /api/admin/tenants/:id/settings`.
+- **Уведомления владельцу**: `notifyOwnerText`/`editOwnerMessage` шлют на
+  `tenants.owner_chat_id` текущего арендатора (fallback — env `OWNER_CHAT_ID`).
+
+Осознанно отложено (общий ресурс для MVP достаточен): per-tenant инстансы мозга
+(BYO-LLM — для Enterprise в S4), per-tenant контент-план и черновики, control-plane
+от нескольких владельцев (привязано к онбордингу S5).
+
 ## Инварианты изоляции (безопасность)
 
 - Слой данных **обязан** фильтровать по `tenant_id` — нельзя полагаться на вызывающий код.
@@ -139,7 +157,7 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
 |---|---|---|---|
 | **S1. Реестр арендаторов** ✅ | `tenants` + `tenant_channels`, `core/tenant.js`, admin-API, seed `default` из env | низкий (аддитивно) | готово |
 | **S2. Изоляция данных** ✅ | `tenant_id` во все таблицы + слой данных (AsyncLocalStorage-контекст); тесты изоляции и миграции | высокий | готово |
-| **S3. Конфиг per-tenant** | персона/режимы/инстансы/facts по арендатору | средний | план |
+| **S3. Конфиг per-tenant** ✅ | персона/facts и режимы по арендатору (БД), уведомления на owner арендатора, admin-API | средний | готово (инстансы/контент-план — позже) |
 | **S4. Биллинг/лимиты** | таблица `usage`, тарифы, лимиты, алерты | средний | план |
 | **S5. Онбординг** | самообслуживание, авто-`setWebhook`, форма персоны | средний | план |
 
