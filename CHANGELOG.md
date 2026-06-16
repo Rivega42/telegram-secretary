@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS, фаза S4 — биллинг и лимиты)
+- **Учёт расхода** (`core/billing.js`, таблица `usage` per-tenant/месяц): метрики
+  `replies` и `tokens` пишутся в `core/brain.js` при генерации
+- **Тарифы** `PLANS`: `free` (Telegram, 100 ответов/мес), `pro` (все платформы, 5000),
+  `enterprise` (безлимит). Арендатор `default` — enterprise (single-owner не лимитируется)
+- **Гейт квоты** в `brain.respond` ДО генерации (экономит LLM): `suspended` /
+  `platform_not_in_plan` / `quota_exceeded` → `{limited:true}`, коннекторы не отвечают;
+  в личке — алерт владельцу (троттлинг), на публичных — тихий пропуск
+- **Admin/видимость**: `GET /api/admin/tenants/:id/usage`, `POST .../plan` (смена тарифа),
+  строка расхода в дайджесте владельцу
+- Тесты: +9 (счётчики, квоты/платформы/suspended, гейт в Brain, admin-usage) — всего 127
+
+
 ### Добавлено (SaaS, фаза S3 — конфиг per-tenant)
 - **Персона per-tenant** (`tenant_persona`): у каждого арендатора своя личность
   секретаря и факты. Источник: БД → файлы `persona/` (арендатор `default`) → нейтральная

@@ -49,6 +49,16 @@ import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
 import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels } from './core/tenant.js';
 import { runWithTenant } from './core/context.js';
+import { usageSummary, shouldAlertLimit } from './core/billing.js';
+
+/** Человекочитаемая причина лимита для уведомления владельцу. */
+function limitReasonText(reason) {
+  return {
+    suspended: 'аккаунт приостановлен',
+    quota_exceeded: 'исчерпан лимит ответов по тарифу',
+    platform_not_in_plan: 'платформа недоступна в текущем тарифе'
+  }[reason] || 'ограничение тарифа';
+}
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -189,6 +199,15 @@ export async function executeBrainResponse(task) {
     // Владелец ответил сам, пока генерировался ответ — не отправляем дубль
     if (task.cancelled) {
       console.log(`[Execute] Task for mapping ${task.mappingId} отменена во время генерации — отправка пропущена`);
+      return;
+    }
+
+    // Лимит тарифа/арендатор приостановлен — не отвечаем, уведомляем владельца (троттлинг)
+    if (brainResult.limited) {
+      console.log(`[Execute] limited (${brainResult.reason}) — автоответ пропущен`);
+      if (shouldAlertLimit()) {
+        await notifyOwnerText(`⚠️ Автоответы приостановлены: ${limitReasonText(brainResult.reason)}. Сообщения от клиентов продолжают приходить — ответь сам.`);
+      }
       return;
     }
 
@@ -720,6 +739,14 @@ export function createApp() {
     if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
     const result = setTenantPersona(req.params.id, req.body || {});
     res.json(result);
+  });
+
+  /**
+   * Admin: расход и лимиты арендатора (SaaS S4). ?period=YYYY-MM
+   */
+  app.get('/api/admin/tenants/:id/usage', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(usageSummary(req.params.id, req.query.period || undefined));
   });
 
   /**

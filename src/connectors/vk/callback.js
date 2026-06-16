@@ -115,6 +115,11 @@ export async function handleVkMessage(message, profile = {}) {
     persona, person, history, isFirstTime: history.length <= 1
   });
 
+  // Лимит тарифа/приостановка — не отвечаем (для VK скрытно, без спама владельцу)
+  if (brainResult.limited) {
+    return { action: 'skip', reason: `limited:${brainResult.reason}`, person_id: person.id };
+  }
+
   // Глобальный draft-режим действует и для ВК
   if (getSettings().draft) {
     const draftKey = `vk:${message.peer_id}:${message.id ?? Date.now()}`;

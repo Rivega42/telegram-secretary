@@ -94,6 +94,11 @@ export async function handleWaMessage(message, contactName = '') {
     persona, person, history, isFirstTime: history.length <= 1
   });
 
+  // Лимит тарифа/приостановка — не отвечаем
+  if (brainResult.limited) {
+    return { action: 'skip', reason: `limited:${brainResult.reason}`, person_id: person.id };
+  }
+
   if (getSettings().draft) {
     const draftKey = `wa:${message.from}:${message.id || Date.now()}`;
     saveDraft(draftKey, {

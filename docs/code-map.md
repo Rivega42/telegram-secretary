@@ -83,6 +83,7 @@ flowchart TB
 | `leads.js` | Лиды со статусами + выгрузка в CRM | `recordLead()`, `setLeadStatus()`, `listLeads()`, `leadsStats()`, `exportLeadToCrm()` |
 | `tenant.js` | Реестр арендаторов (SaaS): резолв канала → арендатор | `createTenant()`, `resolveTenant()`, `registerChannel()`, `seedDefaultTenant()` |
 | `context.js` | Контекст арендатора (AsyncLocalStorage) — слой данных фильтрует по нему | `runWithTenant(id, fn)`, `currentTenantId()` |
+| `billing.js` | Учёт расхода и лимиты по тарифам (`usage`, PLANS); гейт квоты | `checkQuota(platform)`, `recordUsage()`, `getUsage()`, `usageSummary()`, `PLANS` |
 | `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |
 | `format.js` | Мелкие форматтеры + timing-safe сравнение секретов | `truncate()`, `usernameDisplay()`, `timingSafeEqualStr()` |
 

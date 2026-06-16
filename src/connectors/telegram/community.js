@@ -118,6 +118,7 @@ export async function handleGroupMessage(msg, botInfo) {
     : envelope;
 
   const brainResult = await brainRespond(enrichedEnvelope, { persona, person, history: [], isFirstTime: true });
+  if (brainResult.limited) return { action: 'skip', reason: `limited:${brainResult.reason}` };
   if (!brainResult.ok && !brainResult.text) {
     return { action: 'skip', reason: 'brain-error' };
   }
@@ -210,6 +211,7 @@ export async function handleLeadMessage(msg) {
   const brainResult = await brainRespond(envelope, {
     persona, person, history, isFirstTime: history.length <= 1
   });
+  if (brainResult.limited) return { action: 'skip', reason: `limited:${brainResult.reason}`, person_id: person.id };
 
   const sendResult = await sendGroupReply(msg.chat.id, null, brainResult.text);
   if (sendResult.ok) {

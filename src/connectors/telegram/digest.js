@@ -8,6 +8,7 @@
 import { computeStats } from '../../core/stats.js';
 import { feedbackStats } from '../../core/feedback.js';
 import { leadsStats } from '../../core/leads.js';
+import { usageSummary } from '../../core/billing.js';
 import { getAllPending } from '../../scheduler.js';
 import { getAllDrafts } from '../../core/drafts.js';
 import { notifyOwnerText } from '../../forward.js';
@@ -55,6 +56,12 @@ export function buildDigestText(windowHours = 24) {
   const fb = feedbackStats(windowHours * 3600000);
   if (fb.corrections || fb.likes || fb.dislikes) {
     lines.push(`📈 Качество: 👍 ${fb.likes} · 👎 ${fb.dislikes} · правок ${fb.corrections}`);
+  }
+
+  // Расход по тарифу (показываем, только если есть лимит)
+  const u = usageSummary();
+  if (u.replies_limit != null) {
+    lines.push(`💳 Тариф ${u.plan}: ответов ${u.replies}/${u.replies_limit} за ${u.period}`);
   }
 
   if (pending) lines.push(`⏳ Ждут автоответа: ${pending}`);

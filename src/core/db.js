@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS tenant_persona (
   persona_json TEXT,   -- persona.json (имя, владелец, disclosure, fallback)
   base_md TEXT, dm_md TEXT, public_md TEXT, facts_md TEXT
 );
+CREATE TABLE IF NOT EXISTS usage (
+  tenant_id TEXT NOT NULL,
+  period TEXT NOT NULL,     -- YYYY-MM
+  metric TEXT NOT NULL,     -- replies | tokens
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, period, metric)
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
