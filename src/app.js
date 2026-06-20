@@ -52,6 +52,8 @@ import { runWithTenant, currentTenantId } from './core/context.js';
 import { usageSummary, shouldAlertLimit } from './core/billing.js';
 import { onboard, connectTelegram, checkReadiness } from './core/onboarding.js';
 import { setTenantLlm, clearTenantLlm, getTenantLlmPublic } from './core/tenant-llm.js';
+import { createInvoice, getInvoice, listInvoices, markInvoicePaid, purchasablePlans, PLAN_PRICES } from './core/payments.js';
+import * as robokassa from './connectors/robokassa.js';
 
 /** Человекочитаемая причина лимита для уведомления владельцу. */
 function limitReasonText(reason) {
@@ -383,6 +385,8 @@ export function createApp() {
     limit: process.env.BODY_LIMIT || '256kb',
     verify: (req, res, buf) => { req.rawBody = buf; }
   }));
+  // Result URL Robokassa приходит form-urlencoded (server-to-server)
+  app.use(express.urlencoded({ extended: false, limit: process.env.BODY_LIMIT || '256kb' }));
 
   app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -672,6 +676,35 @@ export function createApp() {
   app.get('/wa/webhook', waVerifyHandler);
   app.post('/wa/webhook', waWebhookHandler);
 
+  /**
+   * Robokassa Result URL (server-to-server): подтверждение оплаты. Авторизация —
+   * подписью (Password2), не API-ключом. Ответ `OK<InvId>` — иначе Robokassa повторит.
+   * Параметры приходят в query (GET) или form-body (POST) — мерджим.
+   */
+  function handleRobokassaResult(req, res) {
+    const p = { ...req.query, ...req.body };
+    const { OutSum, InvId, SignatureValue } = p;
+    if (!robokassa.verifyResult({ OutSum, InvId, SignatureValue })) {
+      console.warn(`[Robokassa] Невалидная подпись для InvId=${InvId}`);
+      return res.status(400).type('text/plain').send('bad sign');
+    }
+    const result = markInvoicePaid(InvId);
+    if (!result.ok) {
+      console.error(`[Robokassa] InvId=${InvId}: ${result.error}`);
+      return res.status(404).type('text/plain').send('invoice not found');
+    }
+    console.log(`[Robokassa] Оплачен счёт ${InvId} → тариф ${result.invoice.plan} арендатору ${result.invoice.tenant_id}${result.already ? ' (повтор)' : ''}`);
+    return res.status(200).type('text/plain').send(robokassa.resultAck(InvId));
+  }
+  app.get('/robokassa/result', handleRobokassaResult);
+  app.post('/robokassa/result', handleRobokassaResult);
+
+  // Лендинги для редиректа браузера после оплаты (Success/Fail URL)
+  app.get('/robokassa/success', (req, res) =>
+    res.type('text/plain').send('Оплата прошла. Тариф активируется в течение минуты. Можно вернуться в Telegram.'));
+  app.get('/robokassa/fail', (req, res) =>
+    res.type('text/plain').send('Оплата не завершена. Если деньги списались — напишите в поддержку.'));
+
   app.post('/api/reply', async (req, res) => {
     const { mapping_id, text } = req.body;
 
@@ -778,6 +811,25 @@ export function createApp() {
   app.get('/api/admin/tenants/:id/usage', (req, res) => {
     if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
     res.json(usageSummary(req.params.id, req.query.period || undefined));
+  });
+
+  /**
+   * Admin/биллинг: создать счёт на смену тарифа и вернуть ссылку оплаты Robokassa.
+   * POST /api/admin/tenants/:id/billing/checkout { plan }
+   */
+  app.post('/api/admin/tenants/:id/billing/checkout', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const { plan } = req.body || {};
+    const inv = createInvoice(req.params.id, plan);
+    if (!inv.ok) return res.status(400).json(inv);
+    const pay = robokassa.buildPaymentUrl(inv.invoice);
+    if (!pay.ok) return res.status(503).json(pay); // провайдер не настроен
+    res.status(201).json({ ok: true, invoice: inv.invoice, payment_url: pay.url });
+  });
+
+  app.get('/api/admin/tenants/:id/invoices', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json({ prices: PLAN_PRICES, purchasable: purchasablePlans(), invoices: listInvoices(req.params.id) });
   });
 
   /**

@@ -87,6 +87,7 @@ flowchart TB
 | `onboarding.js` | Self-serve онбординг (SaaS S5): создать арендатора, подключить бота, мастер готовности | `onboard()`, `connectTelegram()`, `checkReadiness()` |
 | `secrets-crypto.js` | Шифрование секретов арендаторов at-rest (AES-256-GCM + слепой индекс HMAC) | `encryptSecret()`, `decryptSecret()`, `blindIndex()`, `isEncryptionEnabled()` |
 | `tenant-llm.js` | BYO-LLM арендатора (Enterprise): свой endpoint поверх routing; ключ шифруется | `setTenantLlm()`, `getTenantInstance()`, `getTenantLlmPublic()`, `clearTenantLlm()` |
+| `payments.js` | Счета на смену тарифа (провайдеро-независимо): создать → оплачено → применить тариф | `createInvoice()`, `markInvoicePaid()`, `listInvoices()`, `purchasablePlans()`, `PLAN_PRICES` |
 | `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |
 | `format.js` | Мелкие форматтеры + timing-safe сравнение секретов | `truncate()`, `usernameDisplay()`, `timingSafeEqualStr()` |
 
@@ -104,6 +105,7 @@ flowchart TB
 |---|---|---|
 | `telegram/business.js` | Личка Telegram Business (от имени владельца) | `toEnvelope(msg)`, `reply(envelope, text)`, `detectAttachments()` |
 | `telegram/setup.js` | Подключение бота арендатора (SaaS S5): валидация токена + регистрация вебхука | `getMe(token)`, `setWebhook(token, url, secret)`, `deleteWebhook(token)` |
+| `robokassa.js` | Приём оплаты Robokassa (SaaS-биллинг): подпись ссылки, проверка Result URL | `isConfigured()`, `buildPaymentUrl(invoice)`, `verifyResult(p)`, `resultAck(invId)` |
 | `telegram/control.js` | Пульт владельца: команды, кнопки, маршрутизация групп/лидов | `startControlLoop(actions)`, `handleControlUpdate()`, `handleCommand()`, `handleCallback()` |
 | `telegram/community.js` | Комментарии канала, Q&A в группах, лид-воронка | `handleGroupMessage(msg, botInfo)`, `handleLeadMessage(msg)`, `classifySurface()`, `shouldReply()` |
 | `telegram/channel.js` | Автопостинг по контент-плану (только черновик) | `startPostingSchedule()`, `generatePost(topic)`, `nextTopic()`, `recordPosted()` |

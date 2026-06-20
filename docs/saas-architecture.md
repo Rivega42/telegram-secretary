@@ -206,6 +206,21 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
   (`instances.json`/env). Переопределяет routing для всех поверхностей арендатора.
 - **Admin**: `GET/POST/DELETE /api/admin/tenants/:id/llm`.
 
+## Приём оплаты (Robokassa)
+
+`core/payments.js` (провайдеро-независимо) + `connectors/robokassa.js` (специфика провайдера).
+
+- **Счёт** (`invoices`): `createInvoice(tenant, plan)` → `pending`. Сумма берётся из
+  `PLAN_PRICES` (env `PRICE_PRO`/`PRICE_ENTERPRISE`) на сервере — клиенту не доверяем.
+- **Ссылка оплаты**: `robokassa.buildPaymentUrl(invoice)` — подпись `md5(login:OutSum:InvId:Password1)`.
+  Endpoint `POST /api/admin/tenants/:id/billing/checkout` отдаёт `payment_url`.
+- **Подтверждение**: Robokassa дёргает Result URL `GET|POST /robokassa/result`
+  (server-to-server). Авторизация — подписью `md5(OutSum:InvId:Password2)` (timing-safe),
+  не API-ключом. Валидно → `markInvoicePaid` (применяет тариф + `active`, идемпотентно) →
+  ответ `OK<InvId>` (иначе Robokassa повторяет вызов).
+- **Лендинги**: `/robokassa/success`, `/robokassa/fail` (редирект браузера).
+- Креды — в env (единый аккаунт Robokassa на сервис, не per-tenant).
+
 ## Инварианты изоляции (безопасность)
 
 - Слой данных **обязан** фильтровать по `tenant_id` — нельзя полагаться на вызывающий код.

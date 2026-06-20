@@ -150,6 +150,18 @@ CREATE TABLE IF NOT EXISTS tenant_secrets (
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_secrets_lookup ON tenant_secrets (key, value);
 CREATE INDEX IF NOT EXISTS idx_tenant_secrets_blind ON tenant_secrets (key, lookup);
+CREATE TABLE IF NOT EXISTS invoices (
+  inv_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  amount INTEGER NOT NULL,        -- сумма в минимальной единице валюты тарифа (руб., целые)
+  currency TEXT NOT NULL DEFAULT 'RUB',
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | paid | failed
+  provider TEXT NOT NULL DEFAULT 'robokassa',
+  created_at TEXT NOT NULL,
+  paid_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_tenant ON invoices (tenant_id, created_at);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
