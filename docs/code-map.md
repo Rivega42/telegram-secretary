@@ -71,15 +71,22 @@ flowchart TB
 |---|---|---|
 | `envelope.js` | Платформо-нейтральный конверт сообщения + `capabilities` | `createEnvelope({...})`, `routingKey(envelope)`, `SURFACES` |
 | `brain.js` | Единая точка генерации ответа; выбор инстанса и драйвера; fallback из персоны при ошибках | `respond(envelope, ctx)` |
-| `persona.js` | Персона из `PERSONA_DIR` (шаблоны `{{owner_name}}`…), disclosure per-surface, generic-фоллбек без имён | `loadPersona()`, `buildSystemPrompt(persona, surface)`, `renderTemplate()` |
+| `persona.js` | Персона per-tenant: БД (`tenant_persona`) → файлы `persona/` (default) → generic; disclosure per-surface | `loadPersona()`, `buildSystemPrompt()`, `setTenantPersona()`, `getTenantPersonaRaw()` |
 | `identity.js` | Персоны: память по людям, политики, склейка только явная | `resolvePerson()`, `getPerson()`, `setPersonPolicy()`, `findSimilarPersons()`, `mergePersons()`, `POLICIES` |
 | `instances.js` | Реестр LLM/OpenClaw-инстансов (`instances.json`, `${ENV}`-подстановка), маршрутизация `platform:surface → инстанс` | `loadInstances()`, `getInstanceFor(key)` |
 | `prompt.js` | Общий промпт: контекст + история (хронологически!) + rewrite-блок | `buildUserPrompt(envelope, {history, persona, rewrite})` |
-| `modes.js` | Глобальные режимы `/on /off /vacation` + draft-флаг (`mode.json`) | `getSettings()`, `setMode()`, `setDraft()` |
+| `modes.js` | Режимы per-tenant `/on /off /vacation` + draft (`tenant_settings`) | `getSettings()`, `setMode()`, `setDraft()` |
 | `drafts.js` | Черновики всех видов (`drafts.json`): dm / community / channel / vk / wa | `saveDraft()`, `getDraft()`, `deleteDraft()` |
 | `ratelimit.js` | Скользящее окно для публичных ответов (на человека и чат) | `allowReply(chatId, userId)` |
-| `db.js` | SQLite `secretary.db` (WAL), схема, авто-миграция старых JSON | `getDb()`, `closeDb()` |
-| `format.js` | Мелкие форматтеры уведомлений | `truncate()`, `usernameDisplay()` |
+| `stats.js` | Агрегаты для дайджеста/метрик из `history`/`persons` | `computeStats({sinceMs})`, `platformOf()` |
+| `feedback.js` | Петля качества: правки (few-shot) и оценки 👍/👎 | `recordCorrection()`, `recordRating()`, `recentCorrections()`, `feedbackStats()` |
+| `leads.js` | Лиды со статусами + выгрузка в CRM | `recordLead()`, `setLeadStatus()`, `listLeads()`, `leadsStats()`, `exportLeadToCrm()` |
+| `tenant.js` | Реестр арендаторов (SaaS): резолв канала/секрета → арендатор, секреты | `createTenant()`, `resolveTenant()`, `registerChannel()`, `seedDefaultTenant()`, `setTenantSecret()`, `resolveTenantByWebhookSecret()` |
+| `context.js` | Контекст арендатора (AsyncLocalStorage) — слой данных фильтрует по нему | `runWithTenant(id, fn)`, `currentTenantId()` |
+| `billing.js` | Учёт расхода и лимиты по тарифам (`usage`, PLANS); гейт квоты | `checkQuota(platform)`, `recordUsage()`, `getUsage()`, `usageSummary()`, `PLANS` |
+| `onboarding.js` | Self-serve онбординг (SaaS S5): создать арендатора, подключить бота, мастер готовности | `onboard()`, `connectTelegram()`, `checkReadiness()` |
+| `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |
+| `format.js` | Мелкие форматтеры + timing-safe сравнение секретов | `truncate()`, `usernameDisplay()`, `timingSafeEqualStr()` |
 
 ## Драйверы мозга (`src/brains/`)
 
@@ -94,9 +101,11 @@ flowchart TB
 | Модуль | Поверхность | Ключевые функции |
 |---|---|---|
 | `telegram/business.js` | Личка Telegram Business (от имени владельца) | `toEnvelope(msg)`, `reply(envelope, text)`, `detectAttachments()` |
+| `telegram/setup.js` | Подключение бота арендатора (SaaS S5): валидация токена + регистрация вебхука | `getMe(token)`, `setWebhook(token, url, secret)`, `deleteWebhook(token)` |
 | `telegram/control.js` | Пульт владельца: команды, кнопки, маршрутизация групп/лидов | `startControlLoop(actions)`, `handleControlUpdate()`, `handleCommand()`, `handleCallback()` |
 | `telegram/community.js` | Комментарии канала, Q&A в группах, лид-воронка | `handleGroupMessage(msg, botInfo)`, `handleLeadMessage(msg)`, `classifySurface()`, `shouldReply()` |
 | `telegram/channel.js` | Автопостинг по контент-плану (только черновик) | `startPostingSchedule()`, `generatePost(topic)`, `nextTopic()`, `recordPosted()` |
+| `telegram/digest.js` | Дайджест владельцу: ежедневно + `/digest` | `startDigestSchedule()`, `buildDigestText()`, `sendDigest()` |
 | `telegram/stt.js` | Whisper-транскрипция голосовых (опционально) | `transcribeVoice(msg)`, `isSttConfigured()` |
 | `vk/api.js`, `vk/callback.js` | ЛС сообществу ВКонтакте (Callback API) | `vkCallbackHandler(req,res)`, `handleVkMessage()`, `sendVkMessage()` |
 | `whatsapp/api.js`, `whatsapp/webhook.js` | Личка WhatsApp бизнес-номера (Cloud API) | `waVerifyHandler()`, `waWebhookHandler()`, `handleWaMessage()`, `sendWaMessage()` |

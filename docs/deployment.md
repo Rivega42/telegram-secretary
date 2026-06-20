@@ -129,13 +129,13 @@ curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo" | jq
 2. Указать username `@VikaSecretary_bot`
 3. Дать разрешения (read/reply)
 
-После подключения secretary-proxy получит `business_connection` событие — оно сохранится в `connections.json`.
+После подключения secretary-proxy получит `business_connection` событие — оно сохранится в БД (`secretary.db`, таблица connections).
 
 ## Проверка работы
 
 1. Любой контакт пишет владельцу
-2. В `log-YYYY-MM-DD.jsonl` появится запись с `kind: "business_message"`
-3. Через **2 минуты** (днём) либо **3 минуты** (ночью) — Вика отвечает в чат от имени владельца
+2. В `log-YYYY-MM-DD.jsonl` появится запись `type: "update"`, владельцу придёт уведомление с кнопками
+3. Через **2 минуты** (днём) либо **3 минуты** (ночью) — секретарь отвечает в чат от имени владельца
 4. Если владелец ответил сам — отложенный ответ отменяется
 
 ## Обновление
@@ -151,11 +151,17 @@ pm2 restart secretary-proxy
 
 ## Бэкап
 
-Каталог `STATE_DIR` стоит бэкапить отдельно — там стейт и логи.
+Весь стейт — в `STATE_DIR`: SQLite `secretary.db` (+`-wal`/`-shm`), лёгкие
+конфиги (`mode.json`, `drafts.json`, `content-plan.json`, `instances.json`) и логи.
 
 ```bash
-tar czf /backup/secretary-state-$(date +%Y%m%d).tar.gz $STATE_DIR
+# Консистентный снимок БД (безопасно на работающем сервисе):
+sqlite3 "$STATE_DIR/secretary.db" ".backup '/backup/secretary-$(date +%Y%m%d).db'"
+# Либо весь каталог (останови сервис для полной консистентности WAL):
+tar czf /backup/secretary-state-$(date +%Y%m%d).tar.gz "$STATE_DIR"
 ```
+
+Перед launch — оцени `docs/production-readiness.md` (готовность, чеклист, ограничения).
 
 ## Откат
 

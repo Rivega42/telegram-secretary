@@ -5,6 +5,125 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS, фаза S5 — самостоятельный онбординг)
+- **Сквозной онбординг** (`core/onboarding.js`): `onboard(...)` создаёт арендатора,
+  задаёт персону, подключает бота и возвращает мастер готовности. Идемпотентно по `id`.
+  Endpoint `POST /api/admin/onboard`
+- **Авто-`setWebhook`** при подключении бота (`connectTelegram` + `connectors/telegram/setup.js`):
+  `getMe` валидирует токен, привязывается канал `tg:<bot_id>`, ставится вебхук с per-tenant
+  секретом. URL — из `PUBLIC_BASE_URL`. Endpoint `POST /api/admin/tenants/:id/connect/telegram`
+- **Секреты арендатора** (таблица `tenant_secrets`): `tg_bot_token`, `tg_webhook_secret`
+  хранятся в БД (в мультиарендном режиме их нельзя держать в env), наружу через API не отдаются
+- **Маршрутизация входящего по секрету вебхука**: апдейт резолвится в арендатора по
+  `X-Telegram-Bot-Api-Secret-Token` (`resolveTenantByWebhookSecret`); нет совпадения —
+  одно-владельческий путь (`WEBHOOK_SECRET` → `default`), поведение single-owner не меняется.
+  Владелец business-сообщения сверяется с `owner_chat_id` арендатора (fallback — env)
+- **Мастер готовности** `GET /api/admin/tenants/:id/readiness`: чеклист (статус, владелец,
+  канал, бот, персона, режим, квота); `ready` — нет ни одного `fail`
+- Новая env `PUBLIC_BASE_URL` (база для авто-`setWebhook`)
+- Тесты: +9 (подключение бота, резолв по секрету, защита чужого бота, готовность,
+  сквозной onboard, admin-API, маршрутизация вебхука) — всего 136
+
+### Добавлено (SaaS, фаза S4 — биллинг и лимиты)
+- **Учёт расхода** (`core/billing.js`, таблица `usage` per-tenant/месяц): метрики
+  `replies` и `tokens` пишутся в `core/brain.js` при генерации
+- **Тарифы** `PLANS`: `free` (Telegram, 100 ответов/мес), `pro` (все платформы, 5000),
+  `enterprise` (безлимит). Арендатор `default` — enterprise (single-owner не лимитируется)
+- **Гейт квоты** в `brain.respond` ДО генерации (экономит LLM): `suspended` /
+  `platform_not_in_plan` / `quota_exceeded` → `{limited:true}`, коннекторы не отвечают;
+  в личке — алерт владельцу (троттлинг), на публичных — тихий пропуск
+- **Admin/видимость**: `GET /api/admin/tenants/:id/usage`, `POST .../plan` (смена тарифа),
+  строка расхода в дайджесте владельцу
+- Тесты: +9 (счётчики, квоты/платформы/suspended, гейт в Brain, admin-usage) — всего 127
+
+
+### Добавлено (SaaS, фаза S3 — конфиг per-tenant)
+- **Персона per-tenant** (`tenant_persona`): у каждого арендатора своя личность
+  секретаря и факты. Источник: БД → файлы `persona/` (арендатор `default`) → нейтральная
+  generic. Admin: `GET/POST /api/admin/tenants/:id/persona`
+- **Режимы per-tenant** (`tenant_settings`): `/on /off /vacation /draft` независимы
+  у арендаторов; старый `mode.json` мигрируется в `default`. Admin:
+  `GET/POST /api/admin/tenants/:id/settings`
+- **Уведомления владельцу per-tenant**: шлются на `owner_chat_id` арендатора
+  (fallback — env `OWNER_CHAT_ID`)
+- Осознанно отложено: per-tenant инстансы мозга (BYO-LLM), контент-план/черновики,
+  control-plane от нескольких владельцев (S4/S5)
+- Тесты: +5 (персона default/generic/заданная, режимы независимы, admin-API) — всего 118
+
+
+### Изменено (SaaS, фаза S2 — изоляция данных по арендаторам)
+- **`tenant_id` во всех таблицах данных** (connections, contacts, conversations,
+  history, persons, person_identities, pending, feedback, leads); там, где внешний id
+  может повторяться между арендаторами (user id, chat id, platform_user_id, person_id) —
+  он в составном PK. `processed` остаётся глобальной
+- **Контекст арендатора** `core/context.js` (AsyncLocalStorage): слой данных
+  (`state.js`/`identity.js`/`leads.js`/`feedback.js`/`stats.js`/`scheduler.js`) сам
+  подставляет фильтр по `tenant_id` — изоляцию гарантирует слой, а не вызывающий код
+- Резолв арендатора в вебхуках: TG → `default`, VK → `vk:<group_id>`, WA →
+  `wa:<phone_number_id>`; scheduler хранит `tenantId` и исполняет ответ в контексте
+- **Миграция до-S2 БД**: `tenant_id` добавляется ко всем таблицам (составные PK —
+  пересозданием), существующие строки → `default`, данные не теряются
+- Single-tenant работает без изменений (всё по умолчанию в `default`)
+- Тесты: +10 (изоляция персон/истории/лидов/контактов/маппингов между арендаторами,
+  миграция старой БД) — всего 113
+
+
+### Добавлено (SaaS, фаза S1 — реестр арендаторов)
+- **Мультиарендность, фундамент** (`core/tenant.js`, таблицы `tenants`/`tenant_channels`):
+  реестр арендаторов, резолв «ключ канала → арендатор», admin-API под отдельным
+  `ADMIN_API_KEY` (`/api/admin/tenants*`). Текущий деплой = арендатор `default`,
+  сидится из env при старте — single-tenant работает без изменений
+- Дизайн целиком: `docs/saas-architecture.md` (решение row-level, фазы S1–S5, модель данных)
+- Тесты: +6 (реестр, каналы/резолв, статусы, seed, изоляция admin-ключа) — всего 103
+
+
+### Добавлено (продуктовые улучшения по ревью)
+- **Дайджест владельцу + метрики**: ежедневная сводка в `DIGEST_TIME` (МСК) и по
+  команде `/digest` — сообщения по ролям, активные диалоги, новые контакты, разбивка
+  по платформам, лиды, качество, очередь. Машиночитаемо: `GET /api/stats?hours=N`.
+  Модули `core/stats.js`, `connectors/telegram/digest.js`
+- **Петля качества** (`core/feedback.js`): правки владельца при «🔄 Переписать»
+  сохраняются и подмешиваются как few-shot в будущие промпты (`FEEDBACK_FEWSHOT`);
+  кнопки 👍/👎 на копии ответа; сводка правок/оценок в дайджесте
+- **База знаний** `persona/facts.md`: факты (услуги/цены/FAQ) в системном промпте —
+  секретарь опирается на них и не выдумывает сверх
+- **Лиды со статусами** (`core/leads.js`): воронка new/working/won/lost с кнопками
+  под «🔥 Лид»; выгрузка нового лида во внешнюю CRM (`CRM_WEBHOOK_URL`,
+  Make/Zapier/Pipedrive); API `GET /api/leads`, `POST /api/leads/:id/status`
+- Новые env: `DIGEST_TIME`, `FEEDBACK_FEWSHOT(_LIMIT)`, `CRM_WEBHOOK_URL(_SECRET)`
+- Тесты: +13 (метрики, дайджест, правки/оценки/few-shot, база знаний, лиды/CRM) — всего 97
+
+### Исправлено (корректность, по ревью)
+- **Двойной ответ при гонке**: если владелец отвечал сам, пока генерировался
+  автоответ, секретарь всё равно отправлял свой — клиент получал две реплики.
+  Теперь `cancelPending` помечает выполняющуюся задачу, исполнитель проверяет
+  флаг перед отправкой и не дублирует (`scheduler.js`, `app.js`)
+- **Дедупликация переживает рестарт**: `processedUpdates`/`processedEvents`/
+  `processedMessages` были in-memory Set — после деплоя повторная доставка вебхука
+  (Telegram/VK/WA) обрабатывалась заново → дубль ответа. Перенесено в SQLite
+  (таблица `processed`, TTL-очистка `PROCESSED_TTL_MS`, по умолчанию 24ч)
+- Тесты: +4 (гонка отмены, персистентная дедупликация, разделение ключей платформ,
+  prune) — всего 84
+
+
+### Усилено (production hardening)
+- **Graceful shutdown**: `SIGTERM`/`SIGINT` останавливают control-loop и автопостинг,
+  закрывают HTTP-сервер и SQLite, hard-exit через 10с при зависании (`docker stop`
+  больше не упирается в SIGKILL)
+- **Process-level handlers**: `unhandledRejection` (лог), `uncaughtException`
+  (лог + корректное тушение)
+- **Глобальный Express error-handler**: битый JSON → 400, превышение тела → 413,
+  прочее → 500 без стектрейса наружу
+- **Timing-safe сравнение секретов** (`core/format.js`): API_KEY, Telegram
+  `WEBHOOK_SECRET`, `VK_SECRET` (WhatsApp HMAC уже был timing-safe)
+- **SQLite**: `busy_timeout=5s` + `synchronous=NORMAL` (надёжность при конкуренции, скорость)
+- **Таймаут Telegram API** (`TG_TIMEOUT_MS`, 15с) — повисший Telegram не блокирует процесс
+- **Health**: проверяет БД (`SELECT 1`), отдаёт 503 при сбое; `owner_chat_id` — флаг, не значение
+- **Лимит тела** вынесен в `BODY_LIMIT` (256kb по умолчанию)
+- Новый `docs/production-readiness.md`: вердикт, scorecard, чеклист запуска, ограничения;
+  `deployment.md` актуализирован (бэкап SQLite через `.backup`)
+- Тесты: +2 (health с проверкой БД, битый JSON → 400) — всего 80
+
 ### Добавлено (этап 4 — WhatsApp, #22)
 - **Коннектор WhatsApp** (`src/connectors/whatsapp/`): личка бизнес-номера через
   Business Cloud API — `GET /wa/webhook` (верификация подписки), `POST /wa/webhook`

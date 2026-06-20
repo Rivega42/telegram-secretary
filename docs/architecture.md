@@ -159,12 +159,20 @@ telegram-метаданные (статистика), persons — платфор
 | `GET` | `/api/pending` | Очередь отложенных |
 | `DELETE` | `/api/pending/:chatId` | Отменить отложенный ответ |
 | `GET` | `/api/mode` | Текущий режим (auto/off/vacation) и draft-флаг |
+| `GET`/`POST` | `/api/admin/*` | Управление арендаторами (SaaS): реестр, тарифы, персона, расход, онбординг — отдельный `ADMIN_API_KEY`. Полный список — [saas-architecture.md](./saas-architecture.md) |
 | `GET` | `/health` | Health check |
 
 Управление режимами и черновиками — командами/кнопками в Telegram
 (см. `operations.md`), API даёт чтение состояния.
 
-Все пути `/api/*` требуют заголовок `X-Api-Key` (env `API_KEY`).
+Все пути `/api/*` требуют заголовок `X-Api-Key` (env `API_KEY`); `/api/admin/*` —
+суперадмин-ключ `ADMIN_API_KEY`.
+
+**Маршрутизация вебхука (мультиарендность, SaaS S5):** `POST /tg/business-webhook`
+определяет арендатора по `X-Telegram-Bot-Api-Secret-Token` (per-tenant секрет, заданный
+при онбординге через `setWebhook`). Нет совпадения — одно-владельческий режим: проверка
+глобального `WEBHOOK_SECRET` и арендатор `default`. Per-tenant секреты и bot-токены лежат
+в таблице `tenant_secrets` (вне env; наружу через API не отдаются).
 
 ## Известные ограничения (осознанные, MVP)
 

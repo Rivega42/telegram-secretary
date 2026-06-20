@@ -14,6 +14,7 @@
 import { routingKey } from './envelope.js';
 import { getInstanceFor } from './instances.js';
 import { loadPersona } from './persona.js';
+import { checkQuota, recordUsage } from './billing.js';
 import * as statelessLlm from '../brains/stateless-llm.js';
 import * as openclaw from '../brains/openclaw.js';
 
@@ -30,7 +31,15 @@ function isDryRun() {
 export async function respond(envelope, ctx = {}) {
   const persona = ctx.persona || loadPersona();
 
+  // Лимиты тарифа/статус арендатора — ДО генерации (экономим LLM при превышении).
+  // limited:true сигналит коннекторам не отправлять ответ клиенту (см. callers).
+  const quota = checkQuota(envelope.platform);
+  if (!quota.allowed) {
+    return { ok: false, limited: true, reason: quota.reason, text: '' };
+  }
+
   if (isDryRun()) {
+    recordUsage('replies', 1);
     return { ok: true, text: persona.dry_run_reply, dry_run: true };
   }
 
@@ -54,5 +63,9 @@ export async function respond(envelope, ctx = {}) {
   if (!result.ok) {
     return { ...result, text: persona.fallback_reply };
   }
+  // Учёт расхода: ответ + токены (если endpoint вернул usage)
+  recordUsage('replies', 1);
+  const tokens = result.usage?.total_tokens;
+  if (tokens) recordUsage('tokens', tokens);
   return result;
 }

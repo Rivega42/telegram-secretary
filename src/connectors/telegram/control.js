@@ -20,9 +20,13 @@
 import { getControlUpdates, answerCallback, notifyOwnerText, getControlBotInfo } from '../../forward.js';
 import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from '../../core/modes.js';
 import { setPersonPolicy, mergePersons, POLICIES } from '../../core/identity.js';
+import { recordRating } from '../../core/feedback.js';
+import { setLeadStatus } from '../../core/leads.js';
 import { cancelPending, executePendingNow, getAllPending } from '../../scheduler.js';
+import { runWithTenant } from '../../core/context.js';
 import { handleGroupMessage, handleLeadMessage } from './community.js';
 import { generatePost } from './channel.js';
+import { buildDigestText } from './digest.js';
 
 const OWNER_CHAT_ID = () => String(process.env.OWNER_CHAT_ID || '');
 
@@ -43,6 +47,7 @@ const HELP_TEXT = `Команды секретаря:
 /vacation — отпуск: отвечать почти сразу (~${VACATION_DELAY_SECONDS} сек)
 /draft — вкл/выкл режим черновиков (ответ уходит только после твоего подтверждения)
 /status — текущий режим и очередь
+/digest — сводка за сутки (сообщения, диалоги, лиды, платформы)
 /help — эта справка
 
 Кнопки под уведомлениями: ответить сейчас / свой ответ / отменить,
@@ -72,6 +77,7 @@ export function handleCommand(text) {
         : '📤 Черновики выключены: ответы уходят автоматически.';
     }
     case '/status': return statusText();
+    case '/digest': return buildDigestText(24);
     case '/start':
     case '/help': return HELP_TEXT;
     default: return null;
@@ -115,6 +121,21 @@ export async function handleCallback(data, actions) {
       await notifyOwnerText('✍️ Напиши, что поправить («короче», «без эмодзи», «предложи звонок»…) — перегенерирую.');
       return 'Жду комментарий';
     }
+  }
+
+  // Статус лида
+  if (ns === 'lead') {
+    const result = setLeadStatus(arg, op);
+    if (!result.ok) return result.error;
+    const labels = { working: '✅ в работе', won: '💰 продано', lost: '❌ потерян', new: 'новый' };
+    return `Лид: ${labels[op] || op}`;
+  }
+
+  // Оценка ответа (👍/👎) — петля качества
+  if (ns === 'fb') {
+    const [surface, personId] = rest;
+    recordRating({ surface: surface || 'dm', personId: personId === '-' ? null : personId, rating: op === 'up' ? 1 : -1 });
+    return op === 'up' ? '👍 учту' : '👎 учту';
   }
 
   // Склейка персон между платформами — только по этому явному подтверждению (#10)
@@ -235,7 +256,8 @@ export function startControlLoop(actions) {
       for (const update of result.result || []) {
         offset = update.update_id + 1;
         try {
-          await handleControlUpdate(update, actions, botInfo);
+          // Один бот уведомлений на деплой → арендатор default (мульти — фаза S5)
+          await runWithTenant('default', () => handleControlUpdate(update, actions, botInfo));
         } catch (err) {
           console.error('[Control] Error handling update:', err);
         }

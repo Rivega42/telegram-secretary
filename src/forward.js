@@ -6,10 +6,26 @@
  * 2. OUT: ответ Вики → клиенту через @VikaBusiness_bot + business_connection_id
  */
 
+import { currentTenantId } from './core/context.js';
+import { getTenant } from './core/tenant.js';
+
 const DRY_RUN = process.env.DRY_RUN === 'true';
+const TG_TIMEOUT_MS = parseInt(process.env.TG_TIMEOUT_MS || '15000', 10);
 
 /**
- * Базовый Telegram API вызов
+ * Chat id владельца ТЕКУЩЕГО арендатора (для уведомлений). Fallback — env
+ * OWNER_CHAT_ID (одно-владельческий режим / арендатор не найден).
+ */
+function resolveOwnerChatId() {
+  try {
+    const t = getTenant(currentTenantId());
+    if (t && t.owner_chat_id) return t.owner_chat_id;
+  } catch { /* БД недоступна — fallback на env */ }
+  return process.env.OWNER_CHAT_ID;
+}
+
+/**
+ * Базовый Telegram API вызов с таймаутом (повисший Telegram не блокирует процесс).
  */
 async function telegramApi(token, method, body = {}) {
   if (DRY_RUN) {
@@ -18,20 +34,21 @@ async function telegramApi(token, method, body = {}) {
   }
 
   const url = `https://api.telegram.org/bot${token}/${method}`;
-  
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(TG_TIMEOUT_MS),
       body: JSON.stringify(body)
     });
-    
+
     const data = await response.json();
-    
+
     if (!data.ok) {
       console.error(`Telegram API error [${method}]:`, data.description);
     }
-    
+
     return data;
   } catch (err) {
     console.error(`Telegram API fetch error [${method}]:`, err.message);
@@ -65,10 +82,10 @@ export async function sendBusinessReply(businessConnectionId, chatId, text) {
  */
 export async function notifyOwnerText(text, opts = {}) {
   const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
-  const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
+  const OWNER_CHAT_ID = resolveOwnerChatId();
 
   if (!ONEINT_TOKEN || !OWNER_CHAT_ID) {
-    console.error('ONEINT_BOT_TOKEN / OWNER_CHAT_ID not set — owner notification skipped');
+    console.error('ONEINT_BOT_TOKEN / owner_chat_id not set — owner notification skipped');
     return { ok: false, error: 'Owner notification not configured' };
   }
 
@@ -86,7 +103,7 @@ export async function notifyOwnerText(text, opts = {}) {
  */
 export async function editOwnerMessage(messageId, text, opts = {}) {
   const ONEINT_TOKEN = process.env.ONEINT_BOT_TOKEN;
-  const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID;
+  const OWNER_CHAT_ID = resolveOwnerChatId();
 
   if (!ONEINT_TOKEN || !OWNER_CHAT_ID || !messageId) {
     return { ok: false, error: 'Not configured or no message id' };

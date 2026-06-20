@@ -9,13 +9,15 @@
 import { chatCompletions } from './llm-http.js';
 import { buildSystemPrompt } from '../core/persona.js';
 import { buildUserPrompt } from '../core/prompt.js';
+import { recentCorrections } from '../core/feedback.js';
 
 export async function respond(envelope, ctx, instance) {
   const { persona, history = [], isFirstTime = true, rewrite = null } = ctx;
+  const corrections = recentCorrections(envelope.surface);
   const result = await chatCompletions(instance, {
     messages: [
       { role: 'system', content: buildSystemPrompt(persona, envelope.surface) },
-      { role: 'user', content: buildUserPrompt(envelope, { history, persona, isFirstTime, rewrite }) }
+      { role: 'user', content: buildUserPrompt(envelope, { history, persona, isFirstTime, rewrite, corrections }) }
     ],
     maxTokens: instance.max_tokens || 300
   });

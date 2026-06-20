@@ -10,8 +10,11 @@ import { createApp, createControlActions } from './app.js';
 import { loadPendingFromFile, getDelayMinutes } from './scheduler.js';
 import { startControlLoop } from './connectors/telegram/control.js';
 import { startPostingSchedule } from './connectors/telegram/channel.js';
+import { startDigestSchedule } from './connectors/telegram/digest.js';
 import { getSettings } from './core/modes.js';
-import { rotateLogs } from './state.js';
+import { rotateLogs, pruneProcessed } from './state.js';
+import { closeDb } from './core/db.js';
+import { seedDefaultTenant } from './core/tenant.js';
 
 const PORT = process.env.PORT || 18792;
 
@@ -50,23 +53,31 @@ validateEnv();
 
 const app = createApp();
 
+// SaaS: арендатор default из env (текущий одно-владельческий режим). Аддитивно, фаза S1.
+seedDefaultTenant();
+
 // Восстановить отложенные ответы, пережившие рестарт
 loadPendingFromFile();
 
-// Ротация логов (содержат переписки): при старте и раз в сутки
+// Ротация логов (содержат переписки) и очистка дедупликации: при старте и раз в сутки
 rotateLogs();
-setInterval(rotateLogs, 24 * 60 * 60 * 1000).unref();
+pruneProcessed();
+setInterval(() => { rotateLogs(); pruneProcessed(); }, 24 * 60 * 60 * 1000).unref();
 
 // Control plane: команды и кнопки владельца через бота уведомлений.
 // В DRY_RUN не поллим (токены обычно фиктивные); CONTROL_POLLING=false — выключить.
+let controlLoop = { stop: () => {} };
 if (process.env.CONTROL_POLLING !== 'false' && process.env.DRY_RUN !== 'true') {
-  startControlLoop(createControlActions());
+  controlLoop = startControlLoop(createControlActions());
 }
 
 // Автопостинг канала (включается, если заданы CHANNEL_ID и POSTING_TIMES)
-startPostingSchedule(createControlActions());
+const postingSchedule = startPostingSchedule(createControlActions());
 
-app.listen(PORT, () => {
+// Ежедневный дайджест владельцу (включается, если задан DIGEST_TIME)
+const digestSchedule = startDigestSchedule();
+
+const server = app.listen(PORT, () => {
   console.log(`\n🚀 Secretary Proxy started on port ${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/health`);
   console.log(`   Webhook: POST http://localhost:${PORT}/tg/business-webhook`);
@@ -89,4 +100,47 @@ app.listen(PORT, () => {
     console.warn('   ⚠️  WEBHOOK_SECRET не задан — webhook принимает запросы без проверки секрета.');
   }
   console.log('');
+});
+
+/**
+ * Корректная остановка по SIGTERM/SIGINT (docker stop, systemd, Ctrl-C):
+ * перестаём поллить, закрываем HTTP-сервер (даём дойти текущим запросам),
+ * закрываем SQLite — и только потом выходим. Жёсткий лимит на случай зависания.
+ */
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[Shutdown] Получен ${signal} — останавливаюсь...`);
+
+  controlLoop.stop();
+  postingSchedule.stop();
+  digestSchedule.stop();
+
+  const hardExit = setTimeout(() => {
+    console.error('[Shutdown] Не закрылись за 10с — выходим принудительно');
+    process.exit(1);
+  }, 10000);
+  hardExit.unref();
+
+  server.close(() => {
+    try { closeDb(); } catch { /* already closed */ }
+    console.log('[Shutdown] HTTP-сервер и БД закрыты, выходим');
+    clearTimeout(hardExit);
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Не падаем от необработанного промиса (например, сетевой сбой в фоновом fetch);
+// логируем, чтобы было видно в мониторинге.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  // Неизвестное состояние — корректно тушимся, процесс-менеджер поднимет заново.
+  shutdown('uncaughtException');
 });

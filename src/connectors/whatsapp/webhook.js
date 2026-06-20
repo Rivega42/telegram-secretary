@@ -20,12 +20,11 @@ import { resolvePerson, findSimilarPersons } from '../../core/identity.js';
 import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
 import { truncate } from '../../core/format.js';
-import { getConversationHistory, appendConversationHistory, logUpdate } from '../../state.js';
+import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
+import { runWithTenant } from '../../core/context.js';
+import { resolveTenant } from '../../core/tenant.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendWaMessage, isWaConfigured } from './api.js';
-
-const processedMessages = new Set();
-const MAX_CACHE = 5000;
 
 export function toEnvelope(message, contactName = '') {
   return createEnvelope({
@@ -94,6 +93,11 @@ export async function handleWaMessage(message, contactName = '') {
   const brainResult = await brainRespond(envelope, {
     persona, person, history, isFirstTime: history.length <= 1
   });
+
+  // Лимит тарифа/приостановка — не отвечаем
+  if (brainResult.limited) {
+    return { action: 'skip', reason: `limited:${brainResult.reason}`, person_id: person.id };
+  }
 
   if (getSettings().draft) {
     const draftKey = `wa:${message.from}:${message.id || Date.now()}`;
@@ -181,19 +185,26 @@ export async function waWebhookHandler(req, res) {
     for (const entry of req.body?.entry || []) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
+        // Резолв арендатора по бизнес-номеру (wa:<phone_number_id>); не найден → default
+        const phoneId = value.metadata?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+        const tenantId = resolveTenant(`wa:${phoneId}`)?.id || 'default';
         const contacts = Object.fromEntries(
           (value.contacts || []).map(c => [c.wa_id, c.profile?.name || ''])
         );
         for (const message of value.messages || []) {
           const key = `wa:${message.id}`;
-          if (processedMessages.has(key)) continue;
-          processedMessages.add(key);
-          if (processedMessages.size > MAX_CACHE) {
-            for (const k of Array.from(processedMessages).slice(0, 1000)) processedMessages.delete(k);
-          }
+          // Персистентная дедупликация — переживает рестарт
+          if (!markProcessed(key)) continue;
           logUpdate({ update_id: key, wa: true, type: message.type });
-          const result = await handleWaMessage(message, contacts[message.from] || '');
-          console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+          try {
+            await runWithTenant(tenantId, async () => {
+              const result = await handleWaMessage(message, contacts[message.from] || '');
+              console.log(`[WA] message → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+            });
+          } catch (err) {
+            console.error('[WA] Error handling message:', err);
+            unmarkProcessed(key); // дать Meta повторить доставку
+          }
         }
         // statuses (доставлено/прочитано) — игнорируем
       }

@@ -24,14 +24,12 @@ import { loadPersona } from '../../core/persona.js';
 import { resolvePerson, findSimilarPersons } from '../../core/identity.js';
 import { getSettings } from '../../core/modes.js';
 import { saveDraft } from '../../core/drafts.js';
-import { truncate, usernameDisplay } from '../../core/format.js';
-import { getConversationHistory, appendConversationHistory, logUpdate } from '../../state.js';
+import { truncate, usernameDisplay, timingSafeEqualStr } from '../../core/format.js';
+import { getConversationHistory, appendConversationHistory, logUpdate, markProcessed, unmarkProcessed } from '../../state.js';
+import { runWithTenant } from '../../core/context.js';
+import { resolveTenant } from '../../core/tenant.js';
 import { notifyOwnerText } from '../../forward.js';
 import { sendVkMessage, vkApi, isVkConfigured } from './api.js';
-
-// Дедупликация событий ВК (повторная доставка при медленном ответе)
-const processedEvents = new Set();
-const MAX_EVENTS_CACHE = 5000;
 
 function vkDisplayName(profile) {
   return [profile?.first_name, profile?.last_name].filter(Boolean).join(' ');
@@ -117,6 +115,11 @@ export async function handleVkMessage(message, profile = {}) {
     persona, person, history, isFirstTime: history.length <= 1
   });
 
+  // Лимит тарифа/приостановка — не отвечаем (для VK скрытно, без спама владельцу)
+  if (brainResult.limited) {
+    return { action: 'skip', reason: `limited:${brainResult.reason}`, person_id: person.id };
+  }
+
   // Глобальный draft-режим действует и для ВК
   if (getSettings().draft) {
     const draftKey = `vk:${message.peer_id}:${message.id ?? Date.now()}`;
@@ -182,7 +185,7 @@ export async function vkCallbackHandler(req, res) {
   }
 
   // Подлинность события
-  if (process.env.VK_SECRET && event.secret !== process.env.VK_SECRET) {
+  if (process.env.VK_SECRET && !timingSafeEqualStr(event.secret, process.env.VK_SECRET)) {
     console.warn('[VK] Invalid callback secret');
     return res.status(403).send('forbidden');
   }
@@ -190,22 +193,25 @@ export async function vkCallbackHandler(req, res) {
   // ВК ретраит, пока не получит 'ok' — отвечаем сразу, обрабатываем асинхронно
   res.send('ok');
 
-  const eventKey = `${event.group_id}:${event.type}:${event.event_id || JSON.stringify(event.object?.message?.id)}`;
-  if (processedEvents.has(eventKey)) return;
-  processedEvents.add(eventKey);
-  if (processedEvents.size > MAX_EVENTS_CACHE) {
-    for (const k of Array.from(processedEvents).slice(0, 1000)) processedEvents.delete(k);
-  }
+  const eventKey = `vk:${event.group_id}:${event.type}:${event.event_id || JSON.stringify(event.object?.message?.id)}`;
+  // Персистентная дедупликация — переживает рестарт
+  if (!markProcessed(eventKey)) return;
+
+  // Резолв арендатора по сообществу (vk:<group_id>); не найден → default
+  const tenantId = resolveTenant(`vk:${event.group_id}`)?.id || 'default';
 
   try {
-    logUpdate({ update_id: eventKey, vk: true, type: event.type });
-    if (event.type === 'message_new') {
-      const message = event.object?.message || event.object;
-      const profile = await fetchProfile(message.from_id);
-      const result = await handleVkMessage(message, profile);
-      console.log(`[VK] message_new → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
-    }
+    await runWithTenant(tenantId, async () => {
+      logUpdate({ update_id: eventKey, vk: true, type: event.type });
+      if (event.type === 'message_new') {
+        const message = event.object?.message || event.object;
+        const profile = await fetchProfile(message.from_id);
+        const result = await handleVkMessage(message, profile);
+        console.log(`[VK] message_new → ${result.action}${result.reason ? ` (${result.reason})` : ''}`);
+      }
+    });
   } catch (err) {
     console.error('[VK] Error handling event:', err);
+    unmarkProcessed(eventKey); // дать ВК повторить доставку
   }
 }

@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getDb } from './core/db.js';
+import { currentTenantId } from './core/context.js';
 
 const STATE_DIR = process.env.STATE_DIR || './state';
 
@@ -19,9 +20,7 @@ if (!fs.existsSync(STATE_DIR)) {
   fs.mkdirSync(STATE_DIR, { recursive: true });
 }
 
-// Кеш для отслеживания дублей по update_id
-const processedUpdates = new Set();
-const MAX_PROCESSED_CACHE = 10000;
+const PROCESSED_TTL_MS = parseInt(process.env.PROCESSED_TTL_MS || String(24 * 60 * 60 * 1000), 10);
 
 /**
  * Записать строку в JSONL лог
@@ -34,26 +33,36 @@ function appendLog(entry) {
 }
 
 /**
- * Проверить и пометить update_id как обработанный (дедупликация)
+ * Проверить и пометить событие обработанным (дедупликация). Персистентно в SQLite —
+ * переживает рестарт, поэтому повторная доставка вебхука после деплоя не вызовет
+ * дубль ответа. key — строка с префиксом платформы (tg:/vk:/wa:).
+ * Возвращает true, если событие новое; false — если уже обработано.
  */
-export function markProcessed(updateId) {
-  if (processedUpdates.has(updateId)) {
-    return false; // уже обработан
-  }
-  processedUpdates.add(updateId);
-  if (processedUpdates.size > MAX_PROCESSED_CACHE) {
-    const toDelete = Array.from(processedUpdates).slice(0, 1000);
-    toDelete.forEach(id => processedUpdates.delete(id));
-  }
-  return true;
+export function markProcessed(key) {
+  const info = getDb()
+    .prepare('INSERT OR IGNORE INTO processed (key, ts) VALUES (?, ?)')
+    .run(String(key), Date.now());
+  return info.changes === 1;
 }
 
 /**
- * Снять пометку «обработан» — вызывается при ошибке обработки,
- * чтобы повторная доставка от Telegram не была отброшена как дубликат
+ * Снять пометку «обработан» — при ошибке обработки, чтобы повторная доставка
+ * не была отброшена как дубликат.
  */
-export function unmarkProcessed(updateId) {
-  processedUpdates.delete(updateId);
+export function unmarkProcessed(key) {
+  getDb().prepare('DELETE FROM processed WHERE key = ?').run(String(key));
+}
+
+/**
+ * Очистить старые записи дедупликации (вызывается при старте и раз в сутки).
+ */
+export function pruneProcessed(ttlMs = PROCESSED_TTL_MS) {
+  try {
+    const info = getDb().prepare('DELETE FROM processed WHERE ts < ?').run(Date.now() - ttlMs);
+    if (info.changes) console.log(`[State] Очищено записей дедупликации: ${info.changes}`);
+  } catch (err) {
+    console.error('[State] Ошибка очистки processed:', err.message);
+  }
 }
 
 /**
@@ -67,7 +76,7 @@ export function generateMappingId() {
  * === CONNECTIONS ===
  */
 export function getConnections() {
-  const rows = getDb().prepare('SELECT id, data FROM connections').all();
+  const rows = getDb().prepare('SELECT id, data FROM connections WHERE tenant_id = ?').all(currentTenantId());
   return Object.fromEntries(rows.map(r => [r.id, JSON.parse(r.data)]));
 }
 
@@ -81,8 +90,8 @@ export function saveConnection(connection) {
     is_enabled: connection.is_enabled,
     updated_at: new Date().toISOString()
   };
-  getDb().prepare('INSERT OR REPLACE INTO connections (id, data) VALUES (?, ?)')
-    .run(String(connection.id), JSON.stringify(data));
+  getDb().prepare('INSERT OR REPLACE INTO connections (id, tenant_id, data) VALUES (?, ?, ?)')
+    .run(String(connection.id), currentTenantId(), JSON.stringify(data));
   appendLog({ type: 'connection', connection_id: connection.id, action: 'saved' });
   return data;
 }
@@ -91,14 +100,15 @@ export function saveConnection(connection) {
  * === CONTACTS === (telegram-метаданные; идентичность/политики — в identity.js)
  */
 export function getContacts() {
-  const rows = getDb().prepare('SELECT id, data FROM contacts').all();
+  const rows = getDb().prepare('SELECT id, data FROM contacts WHERE tenant_id = ?').all(currentTenantId());
   return Object.fromEntries(rows.map(r => [r.id, JSON.parse(r.data)]));
 }
 
 export function updateContact(user, businessConnectionId) {
   const db = getDb();
   const id = String(user.id);
-  const row = db.prepare('SELECT data FROM contacts WHERE id = ?').get(id);
+  const tenant = currentTenantId();
+  const row = db.prepare('SELECT data FROM contacts WHERE tenant_id = ? AND id = ?').get(tenant, id);
   const contact = row ? JSON.parse(row.data) : {
     id: user.id,
     username: user.username || null,
@@ -118,8 +128,8 @@ export function updateContact(user, businessConnectionId) {
     contact.business_connections.push(businessConnectionId);
   }
 
-  db.prepare('INSERT OR REPLACE INTO contacts (id, data) VALUES (?, ?)')
-    .run(id, JSON.stringify(contact));
+  db.prepare('INSERT OR REPLACE INTO contacts (tenant_id, id, data) VALUES (?, ?, ?)')
+    .run(tenant, id, JSON.stringify(contact));
   return contact;
 }
 
@@ -128,15 +138,16 @@ export function updateContact(user, businessConnectionId) {
  * Маппинг: mapping_id → { business_connection_id, business_chat_id, sender_* }
  */
 export function getConversations() {
-  const rows = getDb().prepare('SELECT mapping_id, data FROM conversations').all();
+  const rows = getDb().prepare('SELECT mapping_id, data FROM conversations WHERE tenant_id = ?').all(currentTenantId());
   return Object.fromEntries(rows.map(r => [r.mapping_id, JSON.parse(r.data)]));
 }
 
 export function getOrCreateMapping(businessConnectionId, businessChatId, sender) {
   const db = getDb();
+  const tenant = currentTenantId();
   const existing = db.prepare(
-    'SELECT mapping_id, data FROM conversations WHERE business_connection_id = ? AND business_chat_id = ?'
-  ).get(String(businessConnectionId), String(businessChatId));
+    'SELECT mapping_id, data FROM conversations WHERE tenant_id = ? AND business_connection_id = ? AND business_chat_id = ?'
+  ).get(tenant, String(businessConnectionId), String(businessChatId));
 
   if (existing) {
     const data = JSON.parse(existing.data);
@@ -157,15 +168,15 @@ export function getOrCreateMapping(businessConnectionId, businessChatId, sender)
     last_message_at: new Date().toISOString()
   };
   db.prepare(
-    'INSERT INTO conversations (mapping_id, business_connection_id, business_chat_id, data) VALUES (?, ?, ?, ?)'
-  ).run(mappingId, String(businessConnectionId), String(businessChatId), JSON.stringify(data));
+    'INSERT INTO conversations (mapping_id, tenant_id, business_connection_id, business_chat_id, data) VALUES (?, ?, ?, ?, ?)'
+  ).run(mappingId, tenant, String(businessConnectionId), String(businessChatId), JSON.stringify(data));
   appendLog({ type: 'mapping', mapping_id: mappingId, action: 'created', chat_id: businessChatId });
 
   return { mappingId, isNew: true, ...data };
 }
 
 export function getMapping(mappingId) {
-  const row = getDb().prepare('SELECT data FROM conversations WHERE mapping_id = ?').get(mappingId);
+  const row = getDb().prepare('SELECT data FROM conversations WHERE tenant_id = ? AND mapping_id = ?').get(currentTenantId(), mappingId);
   return row ? JSON.parse(row.data) : null;
 }
 
@@ -174,8 +185,8 @@ export function getMapping(mappingId) {
  */
 export function findMappingByChat(businessConnectionId, businessChatId) {
   const row = getDb().prepare(
-    'SELECT mapping_id, data FROM conversations WHERE business_connection_id = ? AND business_chat_id = ?'
-  ).get(String(businessConnectionId), String(businessChatId));
+    'SELECT mapping_id, data FROM conversations WHERE tenant_id = ? AND business_connection_id = ? AND business_chat_id = ?'
+  ).get(currentTenantId(), String(businessConnectionId), String(businessChatId));
   return row ? { mappingId: row.mapping_id, ...JSON.parse(row.data) } : null;
 }
 
@@ -222,12 +233,12 @@ export function rotateLogs(ttlDays = parseInt(process.env.LOG_TTL_DAYS || '30', 
  */
 export function getConversationHistory(threadId, limit = 10) {
   const rows = getDb().prepare(
-    'SELECT ts, role, text FROM history WHERE thread_id = ? ORDER BY id DESC LIMIT ?'
-  ).all(String(threadId), limit);
+    'SELECT ts, role, text FROM history WHERE tenant_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?'
+  ).all(currentTenantId(), String(threadId), limit);
   return rows.reverse().map(r => ({ ts: r.ts, from: r.role, text: r.text }));
 }
 
 export function appendConversationHistory(threadId, from, text) {
-  getDb().prepare('INSERT INTO history (thread_id, ts, role, text) VALUES (?, ?, ?, ?)')
-    .run(String(threadId), new Date().toISOString(), from, text);
+  getDb().prepare('INSERT INTO history (tenant_id, thread_id, ts, role, text) VALUES (?, ?, ?, ?, ?)')
+    .run(currentTenantId(), String(threadId), new Date().toISOString(), from, text);
 }

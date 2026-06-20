@@ -1,6 +1,16 @@
 /**
- * format.js — мелкие общие форматтеры для уведомлений и логов
+ * format.js — мелкие общие форматтеры и утилиты
  */
+
+import crypto from 'crypto';
+
+/** Сравнение секретов за постоянное время (защита от timing-атак). */
+export function timingSafeEqualStr(a, b) {
+  const ab = Buffer.from(String(a ?? ''));
+  const bb = Buffer.from(String(b ?? ''));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 export function truncate(text, max = 300) {
   const s = String(text ?? '');

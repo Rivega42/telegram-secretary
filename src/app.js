@@ -37,12 +37,29 @@ import {
 } from './state.js';
 import { sendBusinessReply, notifyOwnerText, editOwnerMessage, sendGroupReply, simulateTyping } from './forward.js';
 import { respond as brainRespond } from './core/brain.js';
-import { loadPersona } from './core/persona.js';
+import { loadPersona, setTenantPersona, getTenantPersonaRaw } from './core/persona.js';
 import { resolvePerson, getPerson, getPersons, setPersonPolicy, mergePersons } from './core/identity.js';
 import { createEnvelope } from './core/envelope.js';
-import { truncate, usernameDisplay } from './core/format.js';
-import { getSettings, VACATION_DELAY_SECONDS } from './core/modes.js';
-import { saveDraft, getDraft, deleteDraft } from './core/drafts.js';
+import { truncate, usernameDisplay, timingSafeEqualStr } from './core/format.js';
+import { getDb } from './core/db.js';
+import { getSettings, setMode, setDraft, VACATION_DELAY_SECONDS } from './core/modes.js';
+import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js';
+import { computeStats } from './core/stats.js';
+import { recordCorrection } from './core/feedback.js';
+import { listLeads, setLeadStatus } from './core/leads.js';
+import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret } from './core/tenant.js';
+import { runWithTenant, currentTenantId } from './core/context.js';
+import { usageSummary, shouldAlertLimit } from './core/billing.js';
+import { onboard, connectTelegram, checkReadiness } from './core/onboarding.js';
+
+/** Человекочитаемая причина лимита для уведомления владельцу. */
+function limitReasonText(reason) {
+  return {
+    suspended: 'аккаунт приостановлен',
+    quota_exceeded: 'исчерпан лимит ответов по тарифу',
+    platform_not_in_plan: 'платформа недоступна в текущем тарифе'
+  }[reason] || 'ограничение тарифа';
+}
 import * as telegramBusiness from './connectors/telegram/business.js';
 import { isSttConfigured, transcribeVoice } from './connectors/telegram/stt.js';
 import { vkCallbackHandler } from './connectors/vk/callback.js';
@@ -64,6 +81,7 @@ const HISTORY_CONTEXT_LIMIT = parseInt(process.env.HISTORY_CONTEXT_LIMIT || '25'
 export const OWNER_CHAT_ID = String(process.env.OWNER_CHAT_ID || '');
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
 /**
  * Восстановить конверт из pending-задачи. Старые pending.json (до этапа 1)
@@ -179,6 +197,21 @@ export async function executeBrainResponse(task) {
     const brainResult = await brainRespond(envelope, { persona, person, history, isFirstTime });
     console.log(`[Execute] Brain result: ok=${brainResult.ok}${brainResult.dry_run ? ' (dry_run)' : ''}`);
 
+    // Владелец ответил сам, пока генерировался ответ — не отправляем дубль
+    if (task.cancelled) {
+      console.log(`[Execute] Task for mapping ${task.mappingId} отменена во время генерации — отправка пропущена`);
+      return;
+    }
+
+    // Лимит тарифа/арендатор приостановлен — не отвечаем, уведомляем владельца (троттлинг)
+    if (brainResult.limited) {
+      console.log(`[Execute] limited (${brainResult.reason}) — автоответ пропущен`);
+      if (shouldAlertLimit()) {
+        await notifyOwnerText(`⚠️ Автоответы приостановлены: ${limitReasonText(brainResult.reason)}. Сообщения от клиентов продолжают приходить — ответь сам.`);
+      }
+      return;
+    }
+
     // Draft-режим: клиенту ничего не уходит — черновик владельцу на подтверждение
     if (getSettings().draft) {
       saveDraft(task.mappingId, {
@@ -220,7 +253,14 @@ export async function executeBrainResponse(task) {
       `💼 [${persona.secretary_name} → ${usernameDisplay(envelope.identity)}]\n(⏱ отложенный ответ)\n` +
       `Получено: «${truncate(task.originalText, 200)}»\n` +
       `Ответила: «${truncate(brainResult.text, 300)}»` +
-      (replyResult.ok ? '' : '\n⚠️ ОТПРАВКА НЕ УДАЛАСЬ')
+      (replyResult.ok ? '' : '\n⚠️ ОТПРАВКА НЕ УДАЛАСЬ'),
+      // Оценка ответа — обучающий сигнал для дайджеста/качества
+      replyResult.ok
+        ? { buttons: [[
+            { text: '👍', callback_data: `fb:up:${envelope.surface}:${person?.id || '-'}` },
+            { text: '👎', callback_data: `fb:down:${envelope.surface}:${person?.id || '-'}` }
+          ]] }
+        : {}
     );
   } catch (err) {
     console.error('[Execute] Error executing brain response:', err);
@@ -302,6 +342,14 @@ export function createControlActions() {
         isFirstTime: false,
         rewrite: { previous: draft.text, note }
       });
+      // Петля качества: правка владельца — обучающий сигнал (few-shot в будущих промптах)
+      recordCorrection({
+        surface: draft.envelope?.surface || 'dm',
+        personId: draft.person_id || null,
+        original: draft.text,
+        note,
+        corrected: brainResult.text
+      });
       saveDraft(mappingId, { ...draft, text: brainResult.text });
       await notifyOwnerText(
         `📝 Новый вариант:\n\n«${brainResult.text}»`,
@@ -327,8 +375,11 @@ export function createApp() {
 
   const app = express();
 
-  // rawBody нужен для проверки подписи WhatsApp (X-Hub-Signature-256)
+  // rawBody нужен для проверки подписи WhatsApp (X-Hub-Signature-256).
+  // Лимит тела: webhook'и мессенджеров — небольшие JSON; 256kb с запасом,
+  // защита от раздувания памяти неожиданно большим payload.
   app.use(express.json({
+    limit: process.env.BODY_LIMIT || '256kb',
     verify: (req, res, buf) => { req.rawBody = buf; }
   }));
 
@@ -337,29 +388,46 @@ export function createApp() {
     next();
   });
 
-  // Авторизация админ-API: X-Api-Key или Authorization: Bearer
-  app.use('/api', (req, res, next) => {
-    if (!API_KEY) return next(); // не настроен — предупреждение выводится при старте
+  // Авторизация API (timing-safe). /api/admin/* — отдельный ADMIN_API_KEY (суперадмин
+  // арендаторов); прочие /api/* — пользовательский API_KEY.
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/api/')) return next();
     const provided = req.headers['x-api-key']
       || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    if (provided !== API_KEY) {
-      return res.status(401).json({ error: 'Unauthorized' });
+
+    if (req.path.startsWith('/api/admin')) {
+      if (!ADMIN_API_KEY) return res.status(503).json({ error: 'Admin API disabled (set ADMIN_API_KEY)' });
+      if (!timingSafeEqualStr(provided, ADMIN_API_KEY)) return res.status(401).json({ error: 'Unauthorized' });
+      return next();
     }
+
+    if (!API_KEY) return next(); // не настроен — предупреждение при старте
+    if (!timingSafeEqualStr(provided, API_KEY)) return res.status(401).json({ error: 'Unauthorized' });
     next();
   });
 
   /**
-   * Health check
+   * Health check: проверяет доступность БД (для readiness-проб).
+   * 503 при недоступной БД — оркестратор/мониторинг увидит проблему.
+   * owner_chat_id отдаётся как флаг, а не значение (не светим ID наружу).
    */
   app.get('/health', (req, res) => {
-    res.json({
-      status: 'ok',
+    let dbOk = false;
+    try {
+      getDb().prepare('SELECT 1').get();
+      dbOk = true;
+    } catch (err) {
+      console.error('[Health] DB check failed:', err.message);
+    }
+    res.status(dbOk ? 200 : 503).json({
+      status: dbOk ? 'ok' : 'degraded',
+      db: dbOk,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       env: {
         business_token: !!process.env.BUSINESS_BOT_TOKEN,
         oneint_token: !!process.env.ONEINT_BOT_TOKEN,
-        owner_chat_id: process.env.OWNER_CHAT_ID,
+        owner_chat_id: !!process.env.OWNER_CHAT_ID,
         state_dir: process.env.STATE_DIR,
         dry_run: process.env.DRY_RUN === 'true'
       },
@@ -372,12 +440,17 @@ export function createApp() {
    * Telegram Business Webhook
    */
   app.post('/tg/business-webhook', async (req, res) => {
-    if (WEBHOOK_SECRET) {
-      const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
-      if (headerSecret !== WEBHOOK_SECRET) {
-        console.warn('Invalid webhook secret');
-        return res.status(403).json({ error: 'Invalid secret' });
-      }
+    const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
+
+    // Мультиарендность (S5): per-tenant секрет вебхука → апдейт принадлежит
+    // этому арендатору (секрет уникален, поэтому совпадение само по себе —
+    // авторизация). Если совпадения нет — одно-владельческий режим: проверяем
+    // глобальный WEBHOOK_SECRET и работаем как арендатор default (как раньше).
+    const bySecret = headerSecret ? resolveTenantByWebhookSecret(headerSecret) : null;
+    const tenantId = bySecret ? bySecret.id : 'default';
+    if (!bySecret && WEBHOOK_SECRET && !timingSafeEqualStr(headerSecret, WEBHOOK_SECRET)) {
+      console.warn('Invalid webhook secret');
+      return res.status(403).json({ error: 'Invalid secret' });
     }
 
     const update = req.body;
@@ -386,8 +459,8 @@ export function createApp() {
       return res.status(400).json({ error: 'Invalid update' });
     }
 
-    // Дедупликация
-    if (!markProcessed(update.update_id)) {
+    // Дедупликация (персистентная — переживает рестарт)
+    if (!markProcessed(`tg:${update.update_id}`)) {
       console.log(`Duplicate update_id: ${update.update_id}`);
       return res.json({ ok: true, duplicate: true });
     }
@@ -395,25 +468,28 @@ export function createApp() {
     logUpdate(update);
 
     try {
-      // Подключение/отключение business-аккаунта
-      if (update.business_connection) {
-        const conn = update.business_connection;
-        console.log(`Business connection: ${conn.id} enabled=${conn.is_enabled}`);
-        saveConnection(conn);
-        return res.json({ ok: true, type: 'business_connection' });
-      }
+      // Арендатор резолвится по секрету вебхука (S5); по умолчанию — default
+      return await runWithTenant(tenantId, async () => {
+        // Подключение/отключение business-аккаунта
+        if (update.business_connection) {
+          const conn = update.business_connection;
+          console.log(`Business connection: ${conn.id} enabled=${conn.is_enabled}`);
+          saveConnection(conn);
+          return res.json({ ok: true, type: 'business_connection' });
+        }
 
-      if (update.business_message) {
-        return await handleBusinessMessage(update, res);
-      }
+        if (update.business_message) {
+          return await handleBusinessMessage(update, res);
+        }
 
-      console.log('Unknown update type:', Object.keys(update));
-      return res.json({ ok: true, type: 'unknown' });
+        console.log('Unknown update type:', Object.keys(update));
+        return res.json({ ok: true, type: 'unknown' });
+      });
     } catch (err) {
       console.error('Error processing update:', err);
       // Снимаем пометку дедупликации — Telegram повторит доставку после 500,
       // и повтор не должен быть отброшен как дубликат
-      unmarkProcessed(update.update_id);
+      unmarkProcessed(`tg:${update.update_id}`);
       return res.status(500).json({ error: err.message });
     }
   });
@@ -425,9 +501,11 @@ export function createApp() {
     const businessChatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
     const persona = loadPersona();
+    // Владелец текущего арендатора (мультиарендность S5); fallback — env
+    const ownerChatId = String(getTenant(currentTenantId())?.owner_chat_id || OWNER_CHAT_ID || '');
 
     // Сообщение от ВЛАДЕЛЬЦА (он ответил сам)
-    if (String(sender.id) === OWNER_CHAT_ID) {
+    if (ownerChatId && String(sender.id) === ownerChatId) {
       console.log(`⏭️  Сообщение от владельца в чат ${businessChatId}`);
 
       // Сохраняем ответ владельца в историю — иначе секретарь не будет знать,
@@ -616,6 +694,152 @@ export function createApp() {
   });
 
   /**
+   * Админ-API арендаторов (SaaS, фаза S1) — отдельный ADMIN_API_KEY.
+   */
+  app.get('/api/admin/tenants', (req, res) => {
+    const tenants = listTenants().map(t => ({ ...t, channels: listChannels(t.id) }));
+    res.json({ count: tenants.length, tenants });
+  });
+
+  app.post('/api/admin/tenants', (req, res) => {
+    const { id, name, owner_chat_id, plan } = req.body || {};
+    const result = createTenant({ id, name, ownerChatId: owner_chat_id, plan });
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
+  });
+
+  app.get('/api/admin/tenants/:id', (req, res) => {
+    const tenant = getTenant(req.params.id);
+    if (!tenant) return res.status(404).json({ error: 'tenant not found' });
+    res.json({ ...tenant, channels: listChannels(tenant.id) });
+  });
+
+  app.post('/api/admin/tenants/:id/status', (req, res) => {
+    const result = setTenantStatus(req.params.id, (req.body || {}).status);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  app.post('/api/admin/tenants/:id/plan', (req, res) => {
+    const result = setTenantPlan(req.params.id, (req.body || {}).plan);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  app.post('/api/admin/tenants/:id/channels', (req, res) => {
+    const { channel_key } = req.body || {};
+    if (!channel_key) return res.status(400).json({ error: 'channel_key required' });
+    const result = registerChannel(channel_key, req.params.id);
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
+  });
+
+  /**
+   * Admin: персона арендатора (SaaS S3). Поля: persona_json (объект/строка),
+   * base_md, dm_md, public_md, facts_md.
+   */
+  app.get('/api/admin/tenants/:id/persona', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(getTenantPersonaRaw(req.params.id) || { tenant_id: req.params.id, persona_json: null });
+  });
+
+  app.post('/api/admin/tenants/:id/persona', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const result = setTenantPersona(req.params.id, req.body || {});
+    res.json(result);
+  });
+
+  /**
+   * Admin: расход и лимиты арендатора (SaaS S4). ?period=YYYY-MM
+   */
+  app.get('/api/admin/tenants/:id/usage', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(usageSummary(req.params.id, req.query.period || undefined));
+  });
+
+  /**
+   * Admin/онбординг (SaaS S5).
+   * POST /api/admin/onboard — сквозное подключение арендатора
+   *   { id, name, owner_chat_id, plan, persona{...}, bot_token, webhook_base }
+   */
+  app.post('/api/admin/onboard', async (req, res) => {
+    const result = await onboard(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
+  });
+
+  /**
+   * POST /api/admin/tenants/:id/connect/telegram { bot_token, webhook_base }
+   * Валидирует токен (getMe), привязывает канал, регистрирует setWebhook.
+   */
+  app.post('/api/admin/tenants/:id/connect/telegram', async (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const { bot_token, webhook_base } = req.body || {};
+    const result = await connectTelegram(req.params.id, { botToken: bot_token, webhookBase: webhook_base });
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  /**
+   * GET /api/admin/tenants/:id/readiness — мастер проверки перед боем.
+   */
+  app.get('/api/admin/tenants/:id/readiness', (req, res) => {
+    const result = checkReadiness(req.params.id);
+    if (!result.ok) return res.status(404).json(result);
+    res.json(result);
+  });
+
+  /**
+   * Admin: режимы арендатора (mode/draft) — то же, что команды боту, но для любого арендатора.
+   */
+  app.get('/api/admin/tenants/:id/settings', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(runWithTenant(req.params.id, () => getSettings()));
+  });
+
+  app.post('/api/admin/tenants/:id/settings', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const { mode, draft } = req.body || {};
+    const result = runWithTenant(req.params.id, () => {
+      if (mode !== undefined) {
+        const r = setMode(mode);
+        if (!r.ok) return r;
+      }
+      if (draft !== undefined) setDraft(draft);
+      return { ok: true, settings: getSettings() };
+    });
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  /**
+   * API: лиды (?status=new|working|won|lost) и смена статуса
+   */
+  app.get('/api/leads', (req, res) => {
+    const leads = listLeads({ status: req.query.status || null });
+    res.json({ count: leads.length, leads });
+  });
+
+  app.post('/api/leads/:personId/status', (req, res) => {
+    const result = setLeadStatus(req.params.personId, (req.body || {}).status);
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  /**
+   * API: метрики/статистика. ?hours=24 (окно).
+   */
+  app.get('/api/stats', (req, res) => {
+    const hours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+    const stats = computeStats({ sinceMs: hours * 3600000 });
+    res.json({
+      ...stats,
+      pending: Object.keys(getAllPending()).length,
+      drafts: Object.keys(getAllDrafts()).length
+    });
+  });
+
+  /**
    * API: контакты (исторический стейт)
    */
   app.get('/api/contacts', (req, res) => {
@@ -682,6 +906,21 @@ export function createApp() {
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
+  });
+
+  // Глобальный обработчик ошибок: ловит синхронные ошибки роутов и невалидный
+  // JSON (express.json кидает 400). Детали — в лог, наружу — без стектрейса.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'Payload too large' });
+    }
+    if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+    console.error(`[Error] ${req.method} ${req.path}:`, err.message);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ error: 'Internal error' });
   });
 
   return app;
