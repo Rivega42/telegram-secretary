@@ -12,8 +12,12 @@
  */
 
 import { getDb } from './db.js';
+import { encryptSecret, decryptSecret, blindIndex } from './secrets-crypto.js';
 
 export const DEFAULT_TENANT = 'default';
+
+// Секреты, по значению которых идёт поиск (резолв вебхука) — им нужен слепой индекс.
+const SEARCHABLE_SECRETS = new Set(['tg_webhook_secret']);
 export const TENANT_STATUSES = ['active', 'suspended'];
 
 function rowToTenant(row) {
@@ -92,15 +96,16 @@ export function resolveTenant(channelKey) {
  * (вне env — у каждого арендатора свои), наружу через API не отдаются.
  */
 export function setTenantSecret(tenantId, key, value) {
+  const lookup = SEARCHABLE_SECRETS.has(key) ? blindIndex(String(value)) : null;
   getDb().prepare(
-    'INSERT OR REPLACE INTO tenant_secrets (tenant_id, key, value) VALUES (?, ?, ?)'
-  ).run(tenantId, key, String(value));
+    'INSERT OR REPLACE INTO tenant_secrets (tenant_id, key, value, lookup) VALUES (?, ?, ?, ?)'
+  ).run(tenantId, key, encryptSecret(String(value)), lookup);
   return { ok: true };
 }
 
 export function getTenantSecret(tenantId, key) {
   const row = getDb().prepare('SELECT value FROM tenant_secrets WHERE tenant_id = ? AND key = ?').get(tenantId, key);
-  return row ? row.value : null;
+  return row ? decryptSecret(row.value) : null;
 }
 
 /** Какие секреты заданы (только имена ключей, без значений). */
@@ -114,9 +119,17 @@ export function listTenantSecretKeys(tenantId) {
  */
 export function resolveTenantByWebhookSecret(secret) {
   if (!secret) return null;
-  const row = getDb().prepare(
-    "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND value = ?"
-  ).get(secret);
+  const db = getDb();
+  // Поиск по слепому индексу (значение в БД зашифровано — равенство по value не сработает)
+  let row = db.prepare(
+    "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND lookup = ?"
+  ).get(blindIndex(secret));
+  // Легаси-фоллбек: ранние строки без индекса хранили плейн в value
+  if (!row) {
+    row = db.prepare(
+      "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND lookup IS NULL AND value = ?"
+    ).get(secret);
+  }
   return row ? getTenant(row.tenant_id) : null;
 }
 

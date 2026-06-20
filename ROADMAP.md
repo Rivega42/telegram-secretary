@@ -89,8 +89,10 @@ Single-owner остаётся рабочим режимом (арендатор 
       алерты, admin-usage — #38
 - [x] **S5. Онбординг**: self-serve (`onboard`), авто-`setWebhook` по секрету,
       форма персоны, мастер готовности, `tenant_secrets` — #39
+- [x] **Шифрование секретов at-rest**: `tenant_secrets` шифруется AES-256-GCM
+      (`SECRETS_KEY`), слепой индекс HMAC для резолва вебхука — `core/secrets-crypto.js`
 - Дальше: биллинг-провайдер (оплата), личный кабинет (UI), BYO-LLM для Enterprise,
-      шифрование секретов at-rest/KMS
+      KMS-ротация ключа шифрования
 
 ## Постоянно
 
