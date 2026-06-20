@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS — личный кабинет арендатора)
+- **Self-serve кабинет** (`public/cabinet.html` + `/api/cabinet/*`): арендатор
+  входит по токену кабинета, видит обзор (тариф/usage/готовность), редактирует
+  персону/facts, оплачивает тариф (ссылка Robokassa) и подключает Telegram-бота —
+  всё строго над своим арендатором (id из токена, не из URL)
+- **Токен-авторизация**: `cabinet_token` per-tenant (шифруется at-rest, поиск по
+  слепому индексу); `resolveTenantByCabinetToken`. Выдача — `POST /api/admin/tenants/:id/cabinet-token`
+  (показывается один раз). Без токена → 401, изоляция между арендаторами
+- Статика кабинета (`express.static` `/cabinet`, без фреймворка); Dockerfile копирует `public/`
+- Эндпоинты: `GET /api/cabinet`, `POST /api/cabinet/persona`,
+  `POST /api/cabinet/billing/checkout`, `POST /api/cabinet/connect/telegram`
+- Тесты: +7 (выдача/резолв/ротация токена, 401 без токена, изоляция, self-персона,
+  self-checkout, выдача админом, отдача статики) — всего 161
+
 ### Добавлено (SaaS — приём оплаты, Robokassa)
 - **Биллинг-провайдер Robokassa** (`connectors/robokassa.js` + `core/payments.js`):
   счёт на смену тарифа (`invoices`) → ссылка оплаты → Result URL (подпись MD5
