@@ -17,14 +17,33 @@ import crypto from 'crypto';
 const ALGO = 'aes-256-gcm';
 const PREFIX = 'v1.';
 
-/** 32-байтный ключ из env или null, если шифрование выключено. */
+function deriveKey(s) {
+  return crypto.createHash('sha256').update(s, 'utf8').digest();
+}
+
+/** Строка основного ключа (которым шифруем сейчас). */
+function primaryKeyStr() {
+  return process.env.SECRETS_KEY || process.env.SECRET_ENCRYPTION_KEY || '';
+}
+
+/** Старые ключи (через запятую в SECRETS_KEYS_OLD) — для дешифровки в окне ротации. */
+function oldKeyStrs() {
+  return (process.env.SECRETS_KEYS_OLD || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** 32-байтный основной ключ или null, если шифрование выключено. */
 function rawKey() {
-  const k = process.env.SECRETS_KEY || process.env.SECRET_ENCRYPTION_KEY || '';
-  return k ? crypto.createHash('sha256').update(k, 'utf8').digest() : null;
+  const k = primaryKeyStr();
+  return k ? deriveKey(k) : null;
+}
+
+/** Все ключи (основной + старые) для попыток дешифровки. */
+function allKeys() {
+  return [primaryKeyStr(), ...oldKeyStrs()].filter(Boolean).map(deriveKey);
 }
 
 export function isEncryptionEnabled() {
-  return !!rawKey();
+  return !!primaryKeyStr();
 }
 
 /** Зашифровать значение (или вернуть как есть, если ключ не задан). */
@@ -38,23 +57,42 @@ export function encryptSecret(plain) {
   return PREFIX + [iv, tag, ct].map(b => b.toString('base64')).join('.');
 }
 
-/** Расшифровать; легаси-плейн (без префикса) возвращается как есть. */
+/** Расшифровать; легаси-плейн (без префикса) возвращается как есть. Пробуем
+ *  основной ключ, затем старые (окно ротации) — нужный определяется по auth-тегу GCM. */
 export function decryptSecret(stored) {
   if (typeof stored !== 'string' || !stored.startsWith(PREFIX)) return stored;
-  const key = rawKey();
-  if (!key) throw new Error('SECRETS_KEY не задан, а значение зашифровано');
+  const keys = allKeys();
+  if (!keys.length) throw new Error('SECRETS_KEY не задан, а значение зашифровано');
   const [, ivB, tagB, ctB] = stored.split('.');
-  const decipher = crypto.createDecipheriv(ALGO, key, Buffer.from(ivB, 'base64'));
-  decipher.setAuthTag(Buffer.from(tagB, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(ctB, 'base64')), decipher.final()]).toString('utf8');
+  const iv = Buffer.from(ivB, 'base64'), tag = Buffer.from(tagB, 'base64'), ct = Buffer.from(ctB, 'base64');
+  for (const key of keys) {
+    try {
+      const decipher = crypto.createDecipheriv(ALGO, key, iv);
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+    } catch { /* не тот ключ — пробуем следующий */ }
+  }
+  throw new Error('ни один из ключей (SECRETS_KEY/SECRETS_KEYS_OLD) не подошёл');
 }
 
 /**
- * Слепой индекс для поиска по значению без его раскрытия. С ключом — HMAC,
- * без ключа — само значение (легаси-поиск по плейну остаётся рабочим).
+ * Слепой индекс для поиска по значению без его раскрытия. С ключом — HMAC
+ * на основном ключе, без ключа — само значение (легаси-поиск по плейну).
  */
 export function blindIndex(plain) {
   const key = rawKey();
   if (!key) return String(plain);
   return crypto.createHmac('sha256', key).update(String(plain), 'utf8').digest('hex');
+}
+
+/**
+ * Кандидаты слепого индекса для резолва в окне ротации: индексы по всем ключам
+ * + плейн-фоллбек (для строк, записанных до включения шифрования).
+ */
+export function blindIndexCandidates(plain) {
+  const out = new Set([String(plain)]);
+  for (const key of allKeys()) {
+    out.add(crypto.createHmac('sha256', key).update(String(plain), 'utf8').digest('hex'));
+  }
+  return [...out];
 }
