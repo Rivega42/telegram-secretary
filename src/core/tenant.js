@@ -13,7 +13,7 @@
 
 import crypto from 'crypto';
 import { getDb } from './db.js';
-import { encryptSecret, decryptSecret, blindIndex } from './secrets-crypto.js';
+import { encryptSecret, decryptSecret, blindIndex, blindIndexCandidates } from './secrets-crypto.js';
 
 export const DEFAULT_TENANT = 'default';
 
@@ -121,10 +121,12 @@ export function listTenantSecretKeys(tenantId) {
 function resolveTenantBySecretKey(key, secret) {
   if (!secret) return null;
   const db = getDb();
-  // Поиск по слепому индексу (значение в БД зашифровано — равенство по value не сработает)
+  // Поиск по слепому индексу всех ключей (окно ротации); значение в БД зашифровано.
+  const cands = blindIndexCandidates(secret);
+  const ph = cands.map(() => '?').join(',');
   let row = db.prepare(
-    'SELECT tenant_id FROM tenant_secrets WHERE key = ? AND lookup = ?'
-  ).get(key, blindIndex(secret));
+    `SELECT tenant_id FROM tenant_secrets WHERE key = ? AND lookup IN (${ph})`
+  ).get(key, ...cands);
   // Легаси-фоллбек: ранние строки без индекса хранили плейн в value
   if (!row) {
     row = db.prepare(
@@ -132,6 +134,29 @@ function resolveTenantBySecretKey(key, secret) {
     ).get(key, secret);
   }
   return row ? getTenant(row.tenant_id) : null;
+}
+
+/**
+ * Перешифровать все секреты основным ключом и пересчитать слепые индексы
+ * (KMS-ротация). После прогона старые ключи (SECRETS_KEYS_OLD) можно убрать.
+ * Идемпотентно. Строки, которые не расшифровать ни одним ключом, пропускаются.
+ */
+export function reencryptSecrets() {
+  const db = getDb();
+  const rows = db.prepare('SELECT tenant_id, key, value FROM tenant_secrets').all();
+  const upd = db.prepare('UPDATE tenant_secrets SET value = ?, lookup = ? WHERE tenant_id = ? AND key = ?');
+  let reencrypted = 0, skipped = 0;
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      let plain;
+      try { plain = decryptSecret(r.value); } catch { skipped++; continue; }
+      const lookup = SEARCHABLE_SECRETS.has(r.key) ? blindIndex(plain) : null;
+      upd.run(encryptSecret(plain), lookup, r.tenant_id, r.key);
+      reencrypted++;
+    }
+  });
+  tx();
+  return { ok: true, reencrypted, skipped };
 }
 
 export function resolveTenantByWebhookSecret(secret) {

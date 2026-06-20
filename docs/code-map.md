@@ -85,7 +85,7 @@ flowchart TB
 | `context.js` | Контекст арендатора (AsyncLocalStorage) — слой данных фильтрует по нему | `runWithTenant(id, fn)`, `currentTenantId()` |
 | `billing.js` | Учёт расхода и лимиты по тарифам (`usage`, PLANS); гейт квоты | `checkQuota(platform)`, `recordUsage()`, `getUsage()`, `usageSummary()`, `PLANS` |
 | `onboarding.js` | Self-serve онбординг (SaaS S5): создать арендатора, подключить бота, мастер готовности | `onboard()`, `connectTelegram()`, `checkReadiness()` |
-| `secrets-crypto.js` | Шифрование секретов арендаторов at-rest (AES-256-GCM + слепой индекс HMAC) | `encryptSecret()`, `decryptSecret()`, `blindIndex()`, `isEncryptionEnabled()` |
+| `secrets-crypto.js` | Шифрование секретов at-rest (AES-256-GCM, версии ключей, слепой индекс HMAC) | `encryptSecret()`, `decryptSecret()` (пробует все ключи), `blindIndex()`, `blindIndexCandidates()` |
 | `tenant-llm.js` | BYO-LLM арендатора (Enterprise): свой endpoint поверх routing; ключ шифруется | `setTenantLlm()`, `getTenantInstance()`, `getTenantLlmPublic()`, `clearTenantLlm()` |
 | `payments.js` | Счета на смену тарифа (провайдеро-независимо): создать → оплачено → применить тариф | `createInvoice()`, `markInvoicePaid()`, `listInvoices()`, `purchasablePlans()`, `PLAN_PRICES` |
 | `db.js` | SQLite `secretary.db` (WAL): схема (вкл. `processed`/`feedback`/`leads`), авто-миграция старых JSON | `getDb()`, `closeDb()` |

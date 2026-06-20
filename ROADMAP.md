@@ -97,7 +97,8 @@ Single-owner остаётся рабочим режимом (арендатор 
       авто-апгрейд тарифа — `core/payments.js` + `connectors/robokassa.js`
 - [x] **Личный кабинет (UI)**: self-serve кабинет арендатора по токену
       (`public/cabinet.html` + `/api/cabinet/*`): обзор, персона, оплата, подключение бота
-- Дальше: KMS-ротация ключа шифрования
+- [x] **Ротация ключа шифрования**: версии ключей (`SECRETS_KEY` + `SECRETS_KEYS_OLD`),
+      перешифровка `POST /api/admin/secrets/rotate` без простоя — `core/secrets-crypto.js`
 
 ## Постоянно
 

@@ -47,7 +47,7 @@ import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js
 import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
-import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret, resolveTenantByCabinetToken, issueCabinetToken } from './core/tenant.js';
+import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret, resolveTenantByCabinetToken, issueCabinetToken, reencryptSecrets } from './core/tenant.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { runWithTenant, currentTenantId } from './core/context.js';
@@ -857,6 +857,15 @@ export function createApp() {
     const result = issueCabinetToken(req.params.id);
     if (!result.ok) return res.status(404).json(result);
     res.json(result);
+  });
+
+  /**
+   * Admin: ротация ключа шифрования секретов — перешифровать все секреты
+   * основным SECRETS_KEY и пересчитать индексы. После прогона SECRETS_KEYS_OLD
+   * можно убрать. См. docs/saas-architecture.md (ротация).
+   */
+  app.post('/api/admin/secrets/rotate', (req, res) => {
+    res.json(reencryptSecrets());
   });
 
   /**
