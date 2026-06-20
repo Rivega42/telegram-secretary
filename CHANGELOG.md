@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS — приём оплаты, Robokassa)
+- **Биллинг-провайдер Robokassa** (`connectors/robokassa.js` + `core/payments.js`):
+  счёт на смену тарифа (`invoices`) → ссылка оплаты → Result URL (подпись MD5
+  Password2) → апгрейд тарифа арендатора (идемпотентно, снимает suspend)
+- Цены платных тарифов из env `PRICE_PRO`/`PRICE_ENTERPRISE` (server-side, клиенту
+  не доверяем); `free` не покупается
+- Эндпоинты: `POST /api/admin/tenants/:id/billing/checkout` (ссылка оплаты),
+  `GET /api/admin/tenants/:id/invoices`, вебхук `GET|POST /robokassa/result`
+  (авторизация подписью, не API-ключом; ответ `OK<InvId>`), лендинги
+  `/robokassa/success` и `/robokassa/fail`
+- Подпись Result — timing-safe сравнение; `express.urlencoded` для form-body провайдера
+- Новые env: `ROBOKASSA_MERCHANT_LOGIN`/`_PASSWORD1`/`_PASSWORD2`/`_TEST`,
+  `PRICE_PRO`, `PRICE_ENTERPRISE`
+- Тесты: +6 (счёт/цена/идемпотентность, подписи init+Result, checkout, вебхук
+  апгрейда, доступ без API-ключа) — всего 154
+
 ### Добавлено (SaaS — свой LLM арендатора, BYO-LLM)
 - **BYO-LLM для Enterprise** (`core/tenant-llm.js`): арендатор подключает свой
   OpenAI-совместимый endpoint (или OpenClaw) — конфиг переопределяет глобальный
