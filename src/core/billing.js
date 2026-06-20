@@ -17,10 +17,15 @@ import { currentTenantId } from './context.js';
 import { getTenant } from './tenant.js';
 
 export const PLANS = {
-  free:       { replies_per_month: 100,  platforms: ['telegram'] },
-  pro:        { replies_per_month: 5000, platforms: ['telegram', 'vk', 'whatsapp'] },
-  enterprise: { replies_per_month: null, platforms: ['telegram', 'vk', 'whatsapp'] } // null = безлимит
+  free:       { replies_per_month: 100,  platforms: ['telegram'], byo_llm: false },
+  pro:        { replies_per_month: 5000, platforms: ['telegram', 'vk', 'whatsapp'], byo_llm: false },
+  enterprise: { replies_per_month: null, platforms: ['telegram', 'vk', 'whatsapp'], byo_llm: true } // null = безлимит
 };
+
+/** Разрешает ли тариф арендатора свой LLM-инстанс (BYO-LLM). */
+export function planAllowsByoLlm(tenant) {
+  return !!planOf(tenant).byo_llm;
+}
 
 export function currentPeriod(d = new Date()) {
   return d.toISOString().slice(0, 7); // YYYY-MM

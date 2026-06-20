@@ -191,6 +191,21 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
   чеклист (статус активен, владелец задан, есть канал, подключён бот, персона, режим, квота).
   `ready=true`, если нет ни одного `fail`; `warn` — мягкое предупреждение.
 
+## Свой LLM арендатора (BYO-LLM, Enterprise)
+
+`core/tenant-llm.js` — арендатор подключает собственный OpenAI-совместимый endpoint
+(или OpenClaw) вместо общего пула моделей сервиса.
+
+- **Хранение**: несекретная часть (`driver`/`base_url`/`model`/`stateful`) — в
+  `tenant_settings.data.llm`; `api_key` — в `tenant_secrets` (шифруется at-rest,
+  наружу не отдаётся — только флаг `api_key_set`).
+- **Гейт тарифа**: подключение разрешено планам с capability `byo_llm` (`PLANS` в
+  `billing.js`; по умолчанию только `enterprise`).
+- **Резолв**: в `core/brain.js` `getTenantInstance()` (по текущему арендатору) бьёт
+  раньше глобального `getInstanceFor(routingKey)`. Не настроен → прежнее поведение
+  (`instances.json`/env). Переопределяет routing для всех поверхностей арендатора.
+- **Admin**: `GET/POST/DELETE /api/admin/tenants/:id/llm`.
+
 ## Инварианты изоляции (безопасность)
 
 - Слой данных **обязан** фильтровать по `tenant_id` — нельзя полагаться на вызывающий код.

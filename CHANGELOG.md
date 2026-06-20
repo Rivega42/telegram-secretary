@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS — свой LLM арендатора, BYO-LLM)
+- **BYO-LLM для Enterprise** (`core/tenant-llm.js`): арендатор подключает свой
+  OpenAI-совместимый endpoint (или OpenClaw) — конфиг переопределяет глобальный
+  routing `instances.json` для всех его поверхностей. Гейт тарифа (capability
+  `byo_llm`, по умолчанию только `enterprise`)
+- Несекретная часть (`driver`/`base_url`/`model`/`stateful`) — в `tenant_settings`;
+  `api_key` — в `tenant_secrets` (шифруется at-rest), наружу не отдаётся (флаг `api_key_set`)
+- Резолв в `core/brain.js`: `getTenantInstance()` (по контексту арендатора) бьёт
+  раньше глобального `getInstanceFor`; не настроен → прежнее поведение
+- Admin: `GET/POST/DELETE /api/admin/tenants/:id/llm`
+- Тесты: +6 (гейт тарифа, шифрование ключа, резолв инстанса, реальный вызов
+  endpoint арендатора через стаб-сервер, частичное обновление/сброс) — всего 148
+
 ### Безопасность (SaaS — шифрование секретов at-rest)
 - **Шифрование `tenant_secrets`** (`core/secrets-crypto.js`): bot-токены и секрет
   вебхука шифруются AES-256-GCM ключом из env `SECRETS_KEY` (без новых зависимостей —

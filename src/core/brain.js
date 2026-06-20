@@ -13,6 +13,7 @@
 
 import { routingKey } from './envelope.js';
 import { getInstanceFor } from './instances.js';
+import { getTenantInstance } from './tenant-llm.js';
 import { loadPersona } from './persona.js';
 import { checkQuota, recordUsage } from './billing.js';
 import * as statelessLlm from '../brains/stateless-llm.js';
@@ -43,12 +44,16 @@ export async function respond(envelope, ctx = {}) {
     return { ok: true, text: persona.dry_run_reply, dry_run: true };
   }
 
-  let instance;
-  try {
-    instance = getInstanceFor(routingKey(envelope));
-  } catch (err) {
-    console.error('[Brain]', err.message);
-    return { ok: false, error: err.message, text: persona.fallback_reply };
+  // BYO-LLM арендатора (Enterprise) переопределяет глобальный routing; иначе —
+  // instances.json/env. Свой LLM резолвится по текущему арендатору (контекст).
+  let instance = getTenantInstance();
+  if (!instance) {
+    try {
+      instance = getInstanceFor(routingKey(envelope));
+    } catch (err) {
+      console.error('[Brain]', err.message);
+      return { ok: false, error: err.message, text: persona.fallback_reply };
+    }
   }
 
   const driverName = instance.driver || process.env.BRAIN_DRIVER || 'stateless-llm';
