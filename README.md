@@ -123,6 +123,7 @@ WEBHOOK_SECRET=        # случайная строка для проверки
 API_KEY=               # ключ авторизации админ-API (/api/*)
 ADMIN_API_KEY=         # суперадмин-ключ /api/admin/* (SaaS; ≠ API_KEY)
 PUBLIC_BASE_URL=       # база для авто-setWebhook при онбординге арендатора (SaaS)
+SECRETS_KEY=           # ключ шифрования секретов арендаторов at-rest (SaaS; опц.)
 PORT=18792
 STATE_DIR=./state
 

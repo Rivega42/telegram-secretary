@@ -17,6 +17,7 @@
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
+import { blindIndex, decryptSecret } from './secrets-crypto.js';
 
 let db = null;
 
@@ -144,9 +145,11 @@ CREATE TABLE IF NOT EXISTS tenant_secrets (
   tenant_id TEXT NOT NULL,
   key TEXT NOT NULL,        -- tg_bot_token | tg_webhook_secret | ...
   value TEXT NOT NULL,
+  lookup TEXT,              -- слепой индекс (HMAC) для поисковых секретов
   PRIMARY KEY (tenant_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_secrets_lookup ON tenant_secrets (key, value);
+CREATE INDEX IF NOT EXISTS idx_tenant_secrets_blind ON tenant_secrets (key, lookup);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -231,6 +234,21 @@ function migrateTenantId(db) {
       INSERT INTO pending (tenant_id, chat_id, data) SELECT 'default', chat_id, data FROM pending_old;
       DROP TABLE pending_old;
     `);
+  }
+  // Шифрование секретов at-rest: колонка слепого индекса + бэкфилл поисковых
+  // секретов (tg_webhook_secret). Идемпотентно. См. core/secrets-crypto.js.
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tenant_secrets'").get()
+      && !hasColumn(db, 'tenant_secrets', 'lookup')) {
+    db.exec('ALTER TABLE tenant_secrets ADD COLUMN lookup TEXT');
+    const rows = db.prepare("SELECT tenant_id, value FROM tenant_secrets WHERE key = 'tg_webhook_secret'").all();
+    const upd = db.prepare("UPDATE tenant_secrets SET lookup = ? WHERE tenant_id = ? AND key = 'tg_webhook_secret'");
+    for (const r of rows) {
+      try {
+        upd.run(blindIndex(decryptSecret(r.value)), r.tenant_id);
+      } catch (err) {
+        console.warn(`[DB] Бэкфилл lookup для ${r.tenant_id} пропущен:`, err.message);
+      }
+    }
   }
   if (!hasColumn(db, 'leads', 'tenant_id')) {
     db.exec(`
