@@ -47,9 +47,10 @@ import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js
 import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
-import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels } from './core/tenant.js';
-import { runWithTenant } from './core/context.js';
+import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret } from './core/tenant.js';
+import { runWithTenant, currentTenantId } from './core/context.js';
 import { usageSummary, shouldAlertLimit } from './core/billing.js';
+import { onboard, connectTelegram, checkReadiness } from './core/onboarding.js';
 
 /** Человекочитаемая причина лимита для уведомления владельцу. */
 function limitReasonText(reason) {
@@ -439,12 +440,17 @@ export function createApp() {
    * Telegram Business Webhook
    */
   app.post('/tg/business-webhook', async (req, res) => {
-    if (WEBHOOK_SECRET) {
-      const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
-      if (!timingSafeEqualStr(headerSecret, WEBHOOK_SECRET)) {
-        console.warn('Invalid webhook secret');
-        return res.status(403).json({ error: 'Invalid secret' });
-      }
+    const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
+
+    // Мультиарендность (S5): per-tenant секрет вебхука → апдейт принадлежит
+    // этому арендатору (секрет уникален, поэтому совпадение само по себе —
+    // авторизация). Если совпадения нет — одно-владельческий режим: проверяем
+    // глобальный WEBHOOK_SECRET и работаем как арендатор default (как раньше).
+    const bySecret = headerSecret ? resolveTenantByWebhookSecret(headerSecret) : null;
+    const tenantId = bySecret ? bySecret.id : 'default';
+    if (!bySecret && WEBHOOK_SECRET && !timingSafeEqualStr(headerSecret, WEBHOOK_SECRET)) {
+      console.warn('Invalid webhook secret');
+      return res.status(403).json({ error: 'Invalid secret' });
     }
 
     const update = req.body;
@@ -462,8 +468,8 @@ export function createApp() {
     logUpdate(update);
 
     try {
-      // Один Business-бот на деплой → арендатор default (мульти-TG — фаза S3/S5)
-      return await runWithTenant('default', async () => {
+      // Арендатор резолвится по секрету вебхука (S5); по умолчанию — default
+      return await runWithTenant(tenantId, async () => {
         // Подключение/отключение business-аккаунта
         if (update.business_connection) {
           const conn = update.business_connection;
@@ -495,9 +501,11 @@ export function createApp() {
     const businessChatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
     const persona = loadPersona();
+    // Владелец текущего арендатора (мультиарендность S5); fallback — env
+    const ownerChatId = String(getTenant(currentTenantId())?.owner_chat_id || OWNER_CHAT_ID || '');
 
     // Сообщение от ВЛАДЕЛЬЦА (он ответил сам)
-    if (String(sender.id) === OWNER_CHAT_ID) {
+    if (ownerChatId && String(sender.id) === ownerChatId) {
       console.log(`⏭️  Сообщение от владельца в чат ${businessChatId}`);
 
       // Сохраняем ответ владельца в историю — иначе секретарь не будет знать,
@@ -747,6 +755,38 @@ export function createApp() {
   app.get('/api/admin/tenants/:id/usage', (req, res) => {
     if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
     res.json(usageSummary(req.params.id, req.query.period || undefined));
+  });
+
+  /**
+   * Admin/онбординг (SaaS S5).
+   * POST /api/admin/onboard — сквозное подключение арендатора
+   *   { id, name, owner_chat_id, plan, persona{...}, bot_token, webhook_base }
+   */
+  app.post('/api/admin/onboard', async (req, res) => {
+    const result = await onboard(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.status(201).json(result);
+  });
+
+  /**
+   * POST /api/admin/tenants/:id/connect/telegram { bot_token, webhook_base }
+   * Валидирует токен (getMe), привязывает канал, регистрирует setWebhook.
+   */
+  app.post('/api/admin/tenants/:id/connect/telegram', async (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const { bot_token, webhook_base } = req.body || {};
+    const result = await connectTelegram(req.params.id, { botToken: bot_token, webhookBase: webhook_base });
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  /**
+   * GET /api/admin/tenants/:id/readiness — мастер проверки перед боем.
+   */
+  app.get('/api/admin/tenants/:id/readiness', (req, res) => {
+    const result = checkReadiness(req.params.id);
+    if (!result.ok) return res.status(404).json(result);
+    res.json(result);
   });
 
   /**

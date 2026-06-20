@@ -5,6 +5,25 @@
 
 ## [Unreleased]
 
+### Добавлено (SaaS, фаза S5 — самостоятельный онбординг)
+- **Сквозной онбординг** (`core/onboarding.js`): `onboard(...)` создаёт арендатора,
+  задаёт персону, подключает бота и возвращает мастер готовности. Идемпотентно по `id`.
+  Endpoint `POST /api/admin/onboard`
+- **Авто-`setWebhook`** при подключении бота (`connectTelegram` + `connectors/telegram/setup.js`):
+  `getMe` валидирует токен, привязывается канал `tg:<bot_id>`, ставится вебхук с per-tenant
+  секретом. URL — из `PUBLIC_BASE_URL`. Endpoint `POST /api/admin/tenants/:id/connect/telegram`
+- **Секреты арендатора** (таблица `tenant_secrets`): `tg_bot_token`, `tg_webhook_secret`
+  хранятся в БД (в мультиарендном режиме их нельзя держать в env), наружу через API не отдаются
+- **Маршрутизация входящего по секрету вебхука**: апдейт резолвится в арендатора по
+  `X-Telegram-Bot-Api-Secret-Token` (`resolveTenantByWebhookSecret`); нет совпадения —
+  одно-владельческий путь (`WEBHOOK_SECRET` → `default`), поведение single-owner не меняется.
+  Владелец business-сообщения сверяется с `owner_chat_id` арендатора (fallback — env)
+- **Мастер готовности** `GET /api/admin/tenants/:id/readiness`: чеклист (статус, владелец,
+  канал, бот, персона, режим, квота); `ready` — нет ни одного `fail`
+- Новая env `PUBLIC_BASE_URL` (база для авто-`setWebhook`)
+- Тесты: +9 (подключение бота, резолв по секрету, защита чужого бота, готовность,
+  сквозной onboard, admin-API, маршрутизация вебхука) — всего 136
+
 ### Добавлено (SaaS, фаза S4 — биллинг и лимиты)
 - **Учёт расхода** (`core/billing.js`, таблица `usage` per-tenant/месяц): метрики
   `replies` и `tokens` пишутся в `core/brain.js` при генерации

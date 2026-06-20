@@ -74,6 +74,24 @@
 - [x] Лиды со статусами (new/working/won/lost) + выгрузка в CRM (`CRM_WEBHOOK_URL`)
 - [x] Корректность: двойной ответ при гонке, дедупликация переживает рестарт
 
+## Этап 6 — SaaS: мультиарендность ✅ (#35)
+
+Дизайн и решения — [docs/saas-architecture.md](./docs/saas-architecture.md).
+Single-owner остаётся рабочим режимом (арендатор `default`) на каждом шаге.
+
+- [x] **S1. Реестр арендаторов**: `tenants` + `tenant_channels`, `core/tenant.js`,
+      admin-API, seed `default` из env — #36
+- [x] **S2. Изоляция данных**: `tenant_id` во всех таблицах, контекст на
+      `AsyncLocalStorage`, тесты изоляции и миграции — #37
+- [x] **S3. Конфиг per-tenant**: персона/facts и режимы по арендатору, уведомления
+      на `owner_chat_id` арендатора, admin-API
+- [x] **S4. Биллинг/лимиты**: `usage`, тарифы Free/Pro/Enterprise, гейт квоты в Brain,
+      алерты, admin-usage — #38
+- [x] **S5. Онбординг**: self-serve (`onboard`), авто-`setWebhook` по секрету,
+      форма персоны, мастер готовности, `tenant_secrets` — #39
+- Дальше: биллинг-провайдер (оплата), личный кабинет (UI), BYO-LLM для Enterprise,
+      шифрование секретов at-rest/KMS
+
 ## Постоянно
 
 - [x] Дайджест владельцу (базово) и аналитика объёма/платформ/лидов — см. выше

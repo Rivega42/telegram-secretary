@@ -88,6 +88,39 @@ export function resolveTenant(channelKey) {
 }
 
 /**
+ * Секреты арендатора (SaaS S5): bot-токены, секрет вебхука. Хранятся в БД
+ * (вне env — у каждого арендатора свои), наружу через API не отдаются.
+ */
+export function setTenantSecret(tenantId, key, value) {
+  getDb().prepare(
+    'INSERT OR REPLACE INTO tenant_secrets (tenant_id, key, value) VALUES (?, ?, ?)'
+  ).run(tenantId, key, String(value));
+  return { ok: true };
+}
+
+export function getTenantSecret(tenantId, key) {
+  const row = getDb().prepare('SELECT value FROM tenant_secrets WHERE tenant_id = ? AND key = ?').get(tenantId, key);
+  return row ? row.value : null;
+}
+
+/** Какие секреты заданы (только имена ключей, без значений). */
+export function listTenantSecretKeys(tenantId) {
+  return getDb().prepare('SELECT key FROM tenant_secrets WHERE tenant_id = ?').all(tenantId).map(r => r.key);
+}
+
+/**
+ * Резолв арендатора по секрету вебхука Telegram (S5): входящий апдейт несёт
+ * X-Telegram-Bot-Api-Secret-Token, по нему определяем арендатора. null — нет совпадения.
+ */
+export function resolveTenantByWebhookSecret(secret) {
+  if (!secret) return null;
+  const row = getDb().prepare(
+    "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND value = ?"
+  ).get(secret);
+  return row ? getTenant(row.tenant_id) : null;
+}
+
+/**
  * Сидинг арендатора `default` из env (идемпотентно). Текущий одно-владельческий
  * деплой продолжает работать как этот арендатор.
  */

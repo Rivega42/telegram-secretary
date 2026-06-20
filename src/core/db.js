@@ -136,6 +136,17 @@ CREATE TABLE IF NOT EXISTS usage (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (tenant_id, period, metric)
 );
+-- Секреты арендатора (SaaS, фаза S5): per-tenant bot-токены и секрет вебхука.
+-- В мультиарендном режиме их нельзя держать в env (у каждого арендатора свои).
+-- Файл БД лежит в STATE_DIR (вне репозитория); в проде — шифрование at-rest/KMS.
+-- Наружу (API) значения не отдаются никогда.
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+  tenant_id TEXT NOT NULL,
+  key TEXT NOT NULL,        -- tg_bot_token | tg_webhook_secret | ...
+  value TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_secrets_lookup ON tenant_secrets (key, value);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

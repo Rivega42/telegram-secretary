@@ -160,6 +160,30 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
   поверхностях ответ просто пропускается. Жёсткий стоп — `status: suspended`.
 - **Видимость**: `GET /api/admin/tenants/:id/usage`; строка расхода в дайджесте владельцу.
 
+## Реализация онбординга (S5)
+
+`core/onboarding.js` + `connectors/telegram/setup.js` + таблица `tenant_secrets`.
+
+- **Сквозной онбординг** `onboard({id, name, owner_chat_id, plan, persona, bot_token})`:
+  создаёт арендатора (если нет) → задаёт персону (`setTenantPersona`) → подключает бота →
+  возвращает мастер готовности. Идемпотентно по `id`. Endpoint `POST /api/admin/onboard`.
+- **Подключение бота** `connectTelegram(tenantId, {botToken})`: `getMe` (валидация токена,
+  получение `@username`/`id`) → привязка канала `tg:<bot_id>` → генерация per-tenant секрета
+  вебхука → `setWebhook(url, secret)`. URL берётся из `PUBLIC_BASE_URL`; без него вебхук
+  не ставится (`webhook_skipped`), канал и секрет всё равно сохранены. Чужой бот (канал занят
+  другим арендатором) — отказ. Endpoint `POST /api/admin/tenants/:id/connect/telegram`.
+- **Секреты** в таблице `tenant_secrets (tenant_id, key, value)`: `tg_bot_token`,
+  `tg_webhook_secret`. В мультиарендном режиме их нельзя держать в env (у каждого свои).
+  Наружу через API **не отдаются** (только имена ключей). В проде — шифрование at-rest/KMS.
+- **Маршрутизация входящего**: апдейт несёт `X-Telegram-Bot-Api-Secret-Token`;
+  `resolveTenantByWebhookSecret(secret)` определяет арендатора (секрет уникален → сам по себе
+  авторизация). Нет совпадения → одно-владельческий путь: глобальный `WEBHOOK_SECRET` и
+  арендатор `default` (поведение single-owner не меняется). Владелец business-сообщения
+  сверяется с `owner_chat_id` текущего арендатора (fallback — env `OWNER_CHAT_ID`).
+- **Мастер готовности** `checkReadiness(tenantId)` → `GET /api/admin/tenants/:id/readiness`:
+  чеклист (статус активен, владелец задан, есть канал, подключён бот, персона, режим, квота).
+  `ready=true`, если нет ни одного `fail`; `warn` — мягкое предупреждение.
+
 ## Инварианты изоляции (безопасность)
 
 - Слой данных **обязан** фильтровать по `tenant_id` — нельзя полагаться на вызывающий код.
@@ -175,7 +199,7 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
 | **S2. Изоляция данных** ✅ | `tenant_id` во все таблицы + слой данных (AsyncLocalStorage-контекст); тесты изоляции и миграции | высокий | готово |
 | **S3. Конфиг per-tenant** ✅ | персона/facts и режимы по арендатору (БД), уведомления на owner арендатора, admin-API | средний | готово (инстансы/контент-план — позже) |
 | **S4. Биллинг/лимиты** ✅ | таблица `usage`, тарифы Free/Pro/Enterprise, гейт квоты в Brain, алерты, admin-usage | средний | готово |
-| **S5. Онбординг** | самообслуживание, авто-`setWebhook`, форма персоны | средний | план |
+| **S5. Онбординг** ✅ | self-serve (`onboard`), авто-`setWebhook` по секрету, форма персоны, мастер готовности, `tenant_secrets` | средний | готово |
 
 Single-tenant остаётся рабочим режимом на каждом шаге: один арендатор `default`.
 
