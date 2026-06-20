@@ -19,6 +19,7 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ \
 
 COPY src ./src
 COPY persona ./persona
+COPY public ./public
 
 # Стейт (переписки, pending, персоны) — в volume, переживает пересоздание контейнера
 ENV STATE_DIR=/data \

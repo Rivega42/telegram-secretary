@@ -11,13 +11,14 @@
  * См. docs/saas-architecture.md.
  */
 
+import crypto from 'crypto';
 import { getDb } from './db.js';
 import { encryptSecret, decryptSecret, blindIndex } from './secrets-crypto.js';
 
 export const DEFAULT_TENANT = 'default';
 
-// Секреты, по значению которых идёт поиск (резолв вебхука) — им нужен слепой индекс.
-const SEARCHABLE_SECRETS = new Set(['tg_webhook_secret']);
+// Секреты, по значению которых идёт поиск (резолв вебхука/кабинета) — им нужен слепой индекс.
+const SEARCHABLE_SECRETS = new Set(['tg_webhook_secret', 'cabinet_token']);
 export const TENANT_STATUSES = ['active', 'suspended'];
 
 function rowToTenant(row) {
@@ -117,20 +118,37 @@ export function listTenantSecretKeys(tenantId) {
  * Резолв арендатора по секрету вебхука Telegram (S5): входящий апдейт несёт
  * X-Telegram-Bot-Api-Secret-Token, по нему определяем арендатора. null — нет совпадения.
  */
-export function resolveTenantByWebhookSecret(secret) {
+function resolveTenantBySecretKey(key, secret) {
   if (!secret) return null;
   const db = getDb();
   // Поиск по слепому индексу (значение в БД зашифровано — равенство по value не сработает)
   let row = db.prepare(
-    "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND lookup = ?"
-  ).get(blindIndex(secret));
+    'SELECT tenant_id FROM tenant_secrets WHERE key = ? AND lookup = ?'
+  ).get(key, blindIndex(secret));
   // Легаси-фоллбек: ранние строки без индекса хранили плейн в value
   if (!row) {
     row = db.prepare(
-      "SELECT tenant_id FROM tenant_secrets WHERE key = 'tg_webhook_secret' AND lookup IS NULL AND value = ?"
-    ).get(secret);
+      'SELECT tenant_id FROM tenant_secrets WHERE key = ? AND lookup IS NULL AND value = ?'
+    ).get(key, secret);
   }
   return row ? getTenant(row.tenant_id) : null;
+}
+
+export function resolveTenantByWebhookSecret(secret) {
+  return resolveTenantBySecretKey('tg_webhook_secret', secret);
+}
+
+/** Резолв арендатора по токену личного кабинета (Bearer). null — нет совпадения. */
+export function resolveTenantByCabinetToken(token) {
+  return resolveTenantBySecretKey('cabinet_token', token);
+}
+
+/** Выдать (перевыпустить) токен личного кабинета арендатора. Возвращается один раз. */
+export function issueCabinetToken(tenantId) {
+  if (!getTenant(tenantId)) return { ok: false, error: 'tenant not found' };
+  const token = crypto.randomBytes(24).toString('base64url');
+  setTenantSecret(tenantId, 'cabinet_token', token);
+  return { ok: true, token };
 }
 
 /**

@@ -47,7 +47,9 @@ import { saveDraft, getDraft, deleteDraft, getAllDrafts } from './core/drafts.js
 import { computeStats } from './core/stats.js';
 import { recordCorrection } from './core/feedback.js';
 import { listLeads, setLeadStatus } from './core/leads.js';
-import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret } from './core/tenant.js';
+import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, registerChannel, listChannels, resolveTenantByWebhookSecret, resolveTenantByCabinetToken, issueCabinetToken } from './core/tenant.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { runWithTenant, currentTenantId } from './core/context.js';
 import { usageSummary, shouldAlertLimit } from './core/billing.js';
 import { onboard, connectTelegram, checkReadiness } from './core/onboarding.js';
@@ -388,6 +390,10 @@ export function createApp() {
   // Result URL Robokassa приходит form-urlencoded (server-to-server)
   app.use(express.urlencoded({ extended: false, limit: process.env.BODY_LIMIT || '256kb' }));
 
+  // Личный кабинет арендатора — статика (без авторизации; API под токеном кабинета)
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  app.use('/cabinet', express.static(path.join(__dirname, '../public')));
+
   app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
     next();
@@ -399,6 +405,17 @@ export function createApp() {
     if (!req.path.startsWith('/api/')) return next();
     const provided = req.headers['x-api-key']
       || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
+    // Личный кабинет: авторизация токеном арендатора (не API_KEY). Резолвит
+    // арендатора по Bearer/X-Cabinet-Token; доступ строго к своим данным.
+    if (req.path.startsWith('/api/cabinet')) {
+      const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+        || req.headers['x-cabinet-token'];
+      const tenant = token ? resolveTenantByCabinetToken(token) : null;
+      if (!tenant) return res.status(401).json({ error: 'Unauthorized (cabinet token)' });
+      req.cabinetTenant = tenant;
+      return next();
+    }
 
     if (req.path.startsWith('/api/admin')) {
       if (!ADMIN_API_KEY) return res.status(503).json({ error: 'Admin API disabled (set ADMIN_API_KEY)' });
@@ -830,6 +847,55 @@ export function createApp() {
   app.get('/api/admin/tenants/:id/invoices', (req, res) => {
     if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
     res.json({ prices: PLAN_PRICES, purchasable: purchasablePlans(), invoices: listInvoices(req.params.id) });
+  });
+
+  /**
+   * Admin: выдать (перевыпустить) токен личного кабинета арендатора. Показывается
+   * один раз — оператор передаёт его арендатору для входа в /cabinet.
+   */
+  app.post('/api/admin/tenants/:id/cabinet-token', (req, res) => {
+    const result = issueCabinetToken(req.params.id);
+    if (!result.ok) return res.status(404).json(result);
+    res.json(result);
+  });
+
+  /**
+   * Личный кабинет арендатора (self-serve). Авторизация — токеном кабинета
+   * (middleware выше кладёт req.cabinetTenant). Все операции — строго над своим
+   * арендатором (id из токена, не из URL).
+   */
+  app.get('/api/cabinet', (req, res) => {
+    const t = req.cabinetTenant;
+    res.json({
+      tenant: { id: t.id, name: t.name, plan: t.plan, status: t.status },
+      usage: usageSummary(t.id),
+      readiness: checkReadiness(t.id),
+      persona: getTenantPersonaRaw(t.id),
+      llm: getTenantLlmPublic(t.id),
+      channels: listChannels(t.id),
+      invoices: listInvoices(t.id),
+      prices: PLAN_PRICES,
+      purchasable: purchasablePlans()
+    });
+  });
+
+  app.post('/api/cabinet/persona', (req, res) => {
+    res.json(setTenantPersona(req.cabinetTenant.id, req.body || {}));
+  });
+
+  app.post('/api/cabinet/billing/checkout', (req, res) => {
+    const inv = createInvoice(req.cabinetTenant.id, (req.body || {}).plan);
+    if (!inv.ok) return res.status(400).json(inv);
+    const pay = robokassa.buildPaymentUrl(inv.invoice);
+    if (!pay.ok) return res.status(503).json(pay);
+    res.status(201).json({ ok: true, invoice: inv.invoice, payment_url: pay.url });
+  });
+
+  app.post('/api/cabinet/connect/telegram', async (req, res) => {
+    const { bot_token, webhook_base } = req.body || {};
+    const result = await connectTelegram(req.cabinetTenant.id, { botToken: bot_token, webhookBase: webhook_base });
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
   });
 
   /**

@@ -161,6 +161,8 @@ telegram-метаданные (статистика), persons — платфор
 | `GET` | `/api/mode` | Текущий режим (auto/off/vacation) и draft-флаг |
 | `GET`/`POST` | `/api/admin/*` | Управление арендаторами (SaaS): реестр, тарифы, персона, расход, онбординг, BYO-LLM, биллинг — отдельный `ADMIN_API_KEY`. Полный список — [saas-architecture.md](./saas-architecture.md) |
 | `GET`/`POST` | `/robokassa/result` | Подтверждение оплаты Robokassa (авторизация подписью, не ключом); `success`/`fail` — лендинги |
+| `GET`/`POST` | `/api/cabinet/*` | Личный кабинет арендатора (self-serve): обзор, персона, оплата, подключение бота — авторизация токеном кабинета (`Bearer`), доступ только к своему |
+| `GET` | `/cabinet` | Статика личного кабинета (`public/cabinet.html`) |
 | `GET` | `/health` | Health check |
 
 Управление режимами и черновиками — командами/кнопками в Telegram

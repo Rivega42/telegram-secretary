@@ -221,6 +221,22 @@ Scheduler хранит `tenantId` в задаче и исполняет отве
 - **Лендинги**: `/robokassa/success`, `/robokassa/fail` (редирект браузера).
 - Креды — в env (единый аккаунт Robokassa на сервис, не per-tenant).
 
+## Личный кабинет арендатора (self-serve)
+
+Статика `public/cabinet.html` (`/cabinet`, без фреймворка) + tenant-scoped API `/api/cabinet/*`.
+
+- **Авторизация**: токен кабинета `cabinet_token` per-tenant (шифруется at-rest, поиск
+  по слепому индексу). Middleware резолвит арендатора по `Authorization: Bearer`/
+  `X-Cabinet-Token` → `req.cabinetTenant`. Нет токена → 401. Выдаёт оператор:
+  `POST /api/admin/tenants/:id/cabinet-token` (показывается один раз).
+- **Изоляция**: все операции — над `req.cabinetTenant.id` (из токена, не из URL),
+  поэтому арендатор физически не может обратиться к чужим данным.
+- **Эндпоинты**: `GET /api/cabinet` (обзор: тариф/usage/готовность/персона/каналы/счета),
+  `POST /api/cabinet/persona`, `POST /api/cabinet/billing/checkout` (ссылка Robokassa),
+  `POST /api/cabinet/connect/telegram`.
+- Кабинет переиспользует онбординг (S5), персону (S3), биллинг и приём оплаты —
+  это их self-serve витрина.
+
 ## Инварианты изоляции (безопасность)
 
 - Слой данных **обязан** фильтровать по `tenant_id` — нельзя полагаться на вызывающий код.
