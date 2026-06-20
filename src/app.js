@@ -51,6 +51,7 @@ import { createTenant, listTenants, getTenant, setTenantStatus, setTenantPlan, r
 import { runWithTenant, currentTenantId } from './core/context.js';
 import { usageSummary, shouldAlertLimit } from './core/billing.js';
 import { onboard, connectTelegram, checkReadiness } from './core/onboarding.js';
+import { setTenantLlm, clearTenantLlm, getTenantLlmPublic } from './core/tenant-llm.js';
 
 /** Человекочитаемая причина лимита для уведомления владельцу. */
 function limitReasonText(reason) {
@@ -747,6 +748,28 @@ export function createApp() {
     if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
     const result = setTenantPersona(req.params.id, req.body || {});
     res.json(result);
+  });
+
+  /**
+   * Admin: свой LLM арендатора (BYO-LLM, Enterprise). api_key наружу не отдаётся.
+   * GET → конфиг без ключа; POST { driver, base_url, model, stateful, api_key };
+   * DELETE → вернуть на глобальный routing.
+   */
+  app.get('/api/admin/tenants/:id/llm', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(getTenantLlmPublic(req.params.id) || { tenant_id: req.params.id, llm: null });
+  });
+
+  app.post('/api/admin/tenants/:id/llm', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    const result = setTenantLlm(req.params.id, req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  app.delete('/api/admin/tenants/:id/llm', (req, res) => {
+    if (!getTenant(req.params.id)) return res.status(404).json({ error: 'tenant not found' });
+    res.json(clearTenantLlm(req.params.id));
   });
 
   /**
